@@ -7,14 +7,14 @@ const routes = [
     component: () => import('@/views/Dashboard.vue'),
     meta: { title: '仪表盘' }
   },
-  // PXE 部署 + 节点管理: 暂时从前端隐藏, 只保留仪表盘/组网图/告警中心/故障诊断四个页签。
-  // 后端 /api/pxe 与 /api/nodes 仍在服务, 页面组件也保留, 想恢复时取消注释即可。
-  // {
-  //   path: '/nodes',
-  //   name: 'Nodes',
-  //   component: () => import('@/views/Nodes.vue'),
-  //   meta: { title: '节点管理' }
-  // },
+  {
+    path: '/nodes',
+    name: 'Nodes',
+    component: () => import('@/views/Nodes.vue'),
+    meta: { title: '节点管理' }
+  },
+  // PXE 部署: 暂时从前端隐藏。后端 /api/pxe 仍在服务, 页面组件也保留,
+  // 想恢复时放开下面的路由 + App.vue 侧边栏对应菜单项即可。
   // {
   //   path: '/pxe',
   //   name: 'PXEDeploy',

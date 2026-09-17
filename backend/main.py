@@ -13,7 +13,7 @@ from sqlalchemy import text
 from config import STATIC_DIR, ISO_DIR, FIRMWARE_DIR
 from models.node import init_db, engine
 from models.seed import seed_demo_data
-from api import nodes, pxe, ipmi, network, alerts, diagnose, patrol, firmware
+from api import nodes, pxe, ipmi, network, alerts, diagnose, patrol, firmware, templates
 
 
 def _run_migrations():
@@ -90,6 +90,7 @@ app.include_router(alerts.router,  prefix="/api/alerts",  tags=["告警管理"])
 app.include_router(diagnose.router,prefix="/api/diagnose",tags=["故障诊断"])
 app.include_router(patrol.router,  prefix="/api/patrol",  tags=["巡检管理"])
 app.include_router(firmware.router,prefix="/api/firmware",tags=["固件仓库"])
+app.include_router(templates.router,prefix="/api/templates",tags=["机台型号模板"])
 
 
 @app.get("/api/health")

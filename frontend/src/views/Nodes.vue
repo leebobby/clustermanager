@@ -32,6 +32,10 @@
               <el-icon><Plus /></el-icon>
               新增节点
             </el-button>
+            <el-button type="success" plain @click="openApply">
+              <el-icon><Files /></el-icon>
+              按型号添加
+            </el-button>
           </div>
         </div>
       </template>
@@ -92,6 +96,183 @@
     </el-card>
 
     <!-- 新增 / 编辑节点对话框 -->
+    <!-- ── 按机台型号批量添加 ─────────────────────────────────────────── -->
+    <el-dialog v-model="applyDialogVisible" title="按机台型号添加节点" width="860px" :close-on-click-modal="false">
+      <div class="tpl-bar">
+        <el-select
+          v-model="selectedModel"
+          placeholder="选择机台型号"
+          style="width: 280px"
+          @change="loadPreview"
+        >
+          <el-option
+            v-for="t in templates"
+            :key="t.model"
+            :label="t.model"
+            :value="t.model"
+          />
+        </el-select>
+        <span class="tpl-desc">{{ currentTemplate?.description }}</span>
+        <el-button link type="primary" @click="openManage">管理模板</el-button>
+      </div>
+
+      <el-alert
+        v-for="(c, i) in preview.conflicts"
+        :key="i"
+        :title="c"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="tpl-alert"
+      />
+
+      <el-table
+        v-loading="previewLoading"
+        :data="preview.nodes"
+        stripe
+        size="small"
+        max-height="380"
+        empty-text="选择型号后显示将创建的节点"
+      >
+        <el-table-column prop="hostname" label="主机名" width="120" />
+        <el-table-column prop="node_type" label="类型" width="95" />
+        <el-table-column prop="bmc_ip" label="BMC / 管理面" width="130" />
+        <el-table-column prop="ctrl_ip" label="控制面" width="130" />
+        <el-table-column prop="data_ip" label="数据面" width="130" />
+        <el-table-column prop="data_protocol" label="协议" width="80" />
+        <el-table-column label="规格">
+          <template #default="{ row }">
+            <span class="tpl-spec">
+              {{ row.cpu_cores ? row.cpu_cores + 'C' : '' }}
+              {{ row.memory_gb ? '/ ' + row.memory_gb + 'G' : '' }}
+              {{ row.disk_gb ? '/ ' + row.disk_gb + 'G' : '' }}
+            </span>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <template #footer>
+        <span class="tpl-total">共 {{ preview.total }} 台，IP 已避开库中已占用的地址</span>
+        <el-button @click="applyDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!preview.total"
+          :loading="applying"
+          @click="applyTemplate"
+        >
+          创建这 {{ preview.total }} 台
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ── 模板维护 ───────────────────────────────────────────────────── -->
+    <el-dialog v-model="manageDialogVisible" title="机台型号模板" width="1280px" :close-on-click-modal="false">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        class="tpl-alert"
+        title="模板存在后端的 node_templates.json 文件里，不入数据库。主机名序号与 IP 末段各自独立起算：主机名从「主机名起始」开始，IP 从「IP 起始」开始，两者同步递增。"
+      />
+
+      <div class="tpl-bar">
+        <el-select v-model="editingModelIndex" placeholder="选择型号" style="width: 280px">
+          <el-option
+            v-for="(t, i) in draftTemplates"
+            :key="i"
+            :label="t.model || '(未命名)'"
+            :value="i"
+          />
+        </el-select>
+        <el-button @click="addModel">新增型号</el-button>
+        <el-button type="danger" plain :disabled="editingModelIndex === null" @click="removeModel">
+          删除此型号
+        </el-button>
+      </div>
+
+      <template v-if="editingTemplate">
+        <el-row :gutter="16" class="tpl-meta">
+          <el-col :span="8">
+            <el-input v-model="editingTemplate.model" placeholder="型号名称，如 KX-2000" />
+          </el-col>
+          <el-col :span="16">
+            <el-input v-model="editingTemplate.description" placeholder="说明（可选）" />
+          </el-col>
+        </el-row>
+
+        <el-table :data="editingTemplate.roles" size="small" border max-height="340">
+          <el-table-column label="节点类型" width="112">
+            <template #default="{ row }">
+              <el-select v-model="row.node_type" size="small">
+                <el-option label="Master" value="master" />
+                <el-option label="Slave" value="slave" />
+                <el-option label="SubSwath" value="subswath" />
+                <el-option label="GStorage" value="gstorage" />
+                <el-option label="Sensor" value="sensor" />
+                <el-option label="Acquisition" value="acquisition" />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="台数" width="74">
+            <template #default="{ row }">
+              <el-input-number v-model="row.count" :min="0" :max="255" size="small" controls-position="right" style="width:100%" />
+            </template>
+          </el-table-column>
+          <el-table-column label="主机名前缀" width="112">
+            <template #default="{ row }"><el-input v-model="row.hostname_prefix" size="small" /></template>
+          </el-table-column>
+          <el-table-column label="主机名起始" width="94">
+            <template #default="{ row }">
+              <el-input-number v-model="row.hostname_start" :min="0" size="small" controls-position="right" style="width:100%" />
+            </template>
+          </el-table-column>
+          <el-table-column label="BMC 网段" width="112">
+            <template #default="{ row }"><el-input v-model="row.bmc_prefix" size="small" placeholder="172.16.0." /></template>
+          </el-table-column>
+          <el-table-column label="控制面网段" width="112">
+            <template #default="{ row }"><el-input v-model="row.ctrl_prefix" size="small" placeholder="172.16.3." /></template>
+          </el-table-column>
+          <el-table-column label="数据面网段" width="112">
+            <template #default="{ row }"><el-input v-model="row.data_prefix" size="small" placeholder="100.1.1." /></template>
+          </el-table-column>
+          <el-table-column label="IP 起始" width="84">
+            <template #default="{ row }">
+              <el-input-number v-model="row.ip_start" :min="0" :max="255" size="small" controls-position="right" style="width:100%" />
+            </template>
+          </el-table-column>
+          <el-table-column label="协议" width="92">
+            <template #default="{ row }">
+              <el-select v-model="row.data_protocol" size="small" clearable>
+                <el-option label="DPDK" value="DPDK" />
+                <el-option label="RDMA" value="RDMA" />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="核" width="78">
+            <template #default="{ row }"><el-input-number v-model="row.cpu_cores" :min="0" :controls="false" size="small" style="width:100%" /></template>
+          </el-table-column>
+          <el-table-column label="内存G" width="84">
+            <template #default="{ row }"><el-input-number v-model="row.memory_gb" :min="0" :controls="false" size="small" style="width:100%" /></template>
+          </el-table-column>
+          <el-table-column label="磁盘G" width="96">
+            <template #default="{ row }"><el-input-number v-model="row.disk_gb" :min="0" :controls="false" size="small" style="width:100%" /></template>
+          </el-table-column>
+          <el-table-column label="操作" width="62">
+            <template #default="{ $index }">
+              <el-button link type="danger" size="small" @click="editingTemplate.roles.splice($index, 1)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <el-button size="small" class="tpl-addrole" @click="addRole">添加一行角色</el-button>
+      </template>
+
+      <template #footer>
+        <el-button @click="manageDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingTemplates" @click="saveTemplates">保存模板</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog
       v-model="editDialogVisible"
       :title="editMode === 'add' ? '新增节点' : '编辑节点'"
@@ -339,7 +520,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { Refresh, Plus } from '@element-plus/icons-vue'
+import { Refresh, Plus, Files } from '@element-plus/icons-vue'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -351,6 +532,146 @@ const selectedNode = ref(null)
 const powerDialogVisible = ref(false)
 const networkDialogVisible = ref(false)
 const networkCheckResult = ref(null)
+
+// ── 机台型号模板 ──────────────────────────────────────────────
+// 模板存后端 node_templates.json, 不入库。这里只做: 选型号 → 预览 → 应用, 以及模板维护。
+const applyDialogVisible = ref(false)
+const manageDialogVisible = ref(false)
+const templates = ref([])
+const selectedModel = ref('')
+const preview = ref({ total: 0, nodes: [], conflicts: [] })
+const previewLoading = ref(false)
+const applying = ref(false)
+
+const currentTemplate = computed(() =>
+  templates.value.find(t => t.model === selectedModel.value) || null
+)
+
+const loadTemplates = async () => {
+  try {
+    const { data } = await axios.get('/api/templates')
+    templates.value = data.templates || []
+  } catch (e) {
+    ElMessage.error('加载模板失败: ' + (e.response?.data?.detail || e.message))
+  }
+}
+
+const emptyPreview = () => ({ total: 0, nodes: [], conflicts: [] })
+
+const loadPreview = async () => {
+  if (!selectedModel.value) {
+    preview.value = emptyPreview()
+    return
+  }
+  previewLoading.value = true
+  try {
+    const { data } = await axios.get(
+      `/api/templates/${encodeURIComponent(selectedModel.value)}/preview`
+    )
+    preview.value = data
+  } catch (e) {
+    preview.value = emptyPreview()
+    ElMessage.error('预览失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+const openApply = async () => {
+  preview.value = emptyPreview()
+  selectedModel.value = ''
+  applyDialogVisible.value = true
+  await loadTemplates()
+  // 只有一个型号时直接选中, 省一次点击
+  if (templates.value.length === 1) {
+    selectedModel.value = templates.value[0].model
+    await loadPreview()
+  }
+}
+
+const applyTemplate = async () => {
+  applying.value = true
+  try {
+    const { data } = await axios.post('/api/templates/apply', { model: selectedModel.value })
+    ElMessage.success(`已创建 ${data.created} 台节点`)
+    applyDialogVisible.value = false
+    loadNodes()
+  } catch (e) {
+    ElMessage.error('创建失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    applying.value = false
+  }
+}
+
+// ── 模板维护 ──────────────────────────────────────────────────
+// draftTemplates 是深拷贝的草稿, 保存成功前不影响 templates
+const draftTemplates = ref([])
+const editingModelIndex = ref(null)
+const savingTemplates = ref(false)
+
+const editingTemplate = computed(() =>
+  editingModelIndex.value === null ? null : draftTemplates.value[editingModelIndex.value] || null
+)
+
+const emptyRole = () => ({
+  node_type: 'slave',
+  count: 1,
+  hostname_prefix: 'node',
+  role: '',
+  data_protocol: '',
+  bmc_prefix: '',
+  ctrl_prefix: '',
+  data_prefix: '',
+  hostname_start: 1,
+  ip_start: 1,
+  os_version: '',
+  cpu_cores: null,
+  memory_gb: null,
+  disk_gb: null,
+})
+
+const openManage = async () => {
+  await loadTemplates()
+  draftTemplates.value = JSON.parse(JSON.stringify(templates.value))
+  editingModelIndex.value = draftTemplates.value.length ? 0 : null
+  manageDialogVisible.value = true
+}
+
+const addModel = () => {
+  draftTemplates.value.push({ model: '', description: '', roles: [emptyRole()] })
+  editingModelIndex.value = draftTemplates.value.length - 1
+}
+
+const removeModel = () => {
+  if (editingModelIndex.value === null) return
+  draftTemplates.value.splice(editingModelIndex.value, 1)
+  editingModelIndex.value = draftTemplates.value.length ? 0 : null
+}
+
+const addRole = () => {
+  editingTemplate.value?.roles.push(emptyRole())
+}
+
+const saveTemplates = async () => {
+  savingTemplates.value = true
+  try {
+    const { data } = await axios.put('/api/templates', { templates: draftTemplates.value })
+    templates.value = data.templates || []
+    ElMessage.success('模板已保存')
+    manageDialogVisible.value = false
+    // 改完模板后当前预览可能已失效, 重新拉一次
+    if (selectedModel.value && !templates.value.some(t => t.model === selectedModel.value)) {
+      selectedModel.value = ''
+      preview.value = emptyPreview()
+    } else {
+      loadPreview()
+    }
+  } catch (e) {
+    ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    savingTemplates.value = false
+  }
+}
 
 // ── 新增/编辑 ─────────────────────────────────────────────────
 const editDialogVisible = ref(false)
@@ -686,5 +1007,42 @@ onMounted(() => {
   color: #64748b;
   font-size: 12px;
   font-weight: 600;
+}
+
+/* ── 机台型号模板 ── */
+.tpl-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tpl-desc {
+  color: #909399;
+  font-size: 13px;
+  flex: 1;
+}
+
+.tpl-alert {
+  margin-bottom: 10px;
+}
+
+.tpl-total {
+  color: #909399;
+  font-size: 13px;
+  margin-right: auto;
+}
+
+.tpl-spec {
+  color: #909399;
+  font-size: 12px;
+}
+
+.tpl-meta {
+  margin-bottom: 12px;
+}
+
+.tpl-addrole {
+  margin-top: 10px;
 }
 </style>

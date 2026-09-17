@@ -32,6 +32,8 @@ backend/pxe_data/
 backend/pxe_host.json
 # SSH 凭据 (含明文密码), 仅本地运行时持久化
 backend/ssh_credentials.json
+# 机台型号模板 (运行时可在页面上编辑, 首次启动自动生成默认模板)
+backend/node_templates.json
 
 # ── 发布产物 ────────────────────────────────────────────────
 cluster-manager-windows.zip
