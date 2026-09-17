@@ -144,10 +144,6 @@
         <span>快捷操作</span>
       </template>
       <div class="quick-actions">
-        <el-button type="primary" @click="goToPXE">
-          <el-icon><Download /></el-icon>
-          PXE部署
-        </el-button>
         <el-button type="success" @click="runPatrol">
           <el-icon><Search /></el-icon>
           执行巡检
@@ -266,7 +262,6 @@ const loadRecentAlerts = async () => {
 }
 
 const goToAlerts = () => router.push('/alerts')
-const goToPXE = () => router.push('/pxe')
 const goToNetwork = () => router.push('/network')
 
 const runPatrol = async () => {

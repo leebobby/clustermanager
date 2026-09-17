@@ -571,7 +571,7 @@ const renderEmpty = (W, H) => {
     .attr('x', W / 2).attr('y', H / 2 - 10)
     .attr('text-anchor', 'middle')
     .attr('fill', '#475569').attr('font-size', '15px')
-    .text('暂无节点数据 — 请先在 PXE 部署页面添加节点')
+    .text('暂无节点数据')
 }
 
 const pct = (online, total) => (!total ? 0 : Math.round((online / total) * 100))

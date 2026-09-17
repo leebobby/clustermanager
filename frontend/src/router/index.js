@@ -7,18 +7,20 @@ const routes = [
     component: () => import('@/views/Dashboard.vue'),
     meta: { title: '仪表盘' }
   },
-  {
-    path: '/nodes',
-    name: 'Nodes',
-    component: () => import('@/views/Nodes.vue'),
-    meta: { title: '节点管理' }
-  },
-  {
-    path: '/pxe',
-    name: 'PXEDeploy',
-    component: () => import('@/views/PXEDeploy.vue'),
-    meta: { title: 'PXE部署' }
-  },
+  // PXE 部署 + 节点管理: 暂时从前端隐藏, 只保留仪表盘/组网图/告警中心/故障诊断四个页签。
+  // 后端 /api/pxe 与 /api/nodes 仍在服务, 页面组件也保留, 想恢复时取消注释即可。
+  // {
+  //   path: '/nodes',
+  //   name: 'Nodes',
+  //   component: () => import('@/views/Nodes.vue'),
+  //   meta: { title: '节点管理' }
+  // },
+  // {
+  //   path: '/pxe',
+  //   name: 'PXEDeploy',
+  //   component: () => import('@/views/PXEDeploy.vue'),
+  //   meta: { title: 'PXE部署' }
+  // },
   {
     path: '/alerts',
     name: 'Alerts',
@@ -43,6 +45,11 @@ const routes = [
     name: 'NetworkMap',
     component: () => import('@/views/NetworkMap.vue'),
     meta: { title: '组网图' }
+  },
+  // 未匹配到的路径(含已隐藏的 /pxe、/nodes 旧书签)统一兜回仪表盘, 避免白屏
+  {
+    path: '/:pathMatch(.*)*',
+    redirect: '/'
   }
 ]
 

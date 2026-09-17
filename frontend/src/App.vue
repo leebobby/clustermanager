@@ -15,6 +15,7 @@
           <el-icon><Odometer /></el-icon>
           <span>仪表盘</span>
         </el-menu-item>
+        <!-- PXE部署 / 节点管理: 暂时隐藏, 路由同步已注释, 恢复时两处一起放开
         <el-menu-item index="/pxe">
           <el-icon><Download /></el-icon>
           <span>PXE部署</span>
@@ -23,6 +24,7 @@
           <el-icon><Server /></el-icon>
           <span>节点管理</span>
         </el-menu-item>
+        -->
         <el-menu-item index="/network">
           <el-icon><Share /></el-icon>
           <span>组网图</span>
