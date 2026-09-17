@@ -1,0 +1,14 @@
+{
+  "hostname": "host-server",
+  "bmc_ip": "172.16.0.10",
+  "bmc_user": "Administrator",
+  "bmc_password": "",
+  "redfish_manager_id": "1",
+  "redfish_system_id": "1",
+  "redfish_virtual_media_id": "CD",
+  "ctrl_ip": "172.16.3.10",
+  "iso_filename": "",
+  "iso_http_host": "172.16.0.5",
+  "iso_http_port": 8000,
+  "note": "Windows 管理站通过 BMC 虚拟介质挂载 ISO 触发自部署"
+}

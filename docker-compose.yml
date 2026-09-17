@@ -1,0 +1,28 @@
+services:
+  cluster-manager:
+    image: cluster-manager:latest
+    # 从本地 Dockerfile 构建时取消下面注释：
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # 持久化数据目录（DB + nodes.json + pxe_data）
+      - cluster_data:/data
+    environment:
+      - CLUSTER_MANAGER_HOST=0.0.0.0
+      - CLUSTER_MANAGER_PORT=8000
+      - CLUSTER_MANAGER_DATA=/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  cluster_data:
+    driver: local

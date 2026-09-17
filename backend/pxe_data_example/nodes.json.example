@@ -1,0 +1,33 @@
+{
+  "_comment": "nodes.json 模板 — 以节点管理网口 MAC 地址为 key，按实际集群填写后放到 backend/pxe_data/nodes.json",
+  "_hardware": "示例：全角色系统盘统一为 2×960G 硬件 RAID1 -> /dev/sda",
+  "aa:bb:cc:11:00:01": {
+    "hostname_new": "master-01",
+    "role": "master",
+    "ctrl_nic": "eno1",
+    "ctrl_ip": "172.16.3.11/24",
+    "ctrl_gw": "172.16.3.1",
+    "dpdk_nics": "eno2 eno3",
+    "dpdk_ips": "200.1.1.11/24 200.1.2.31/24",
+    "rdma_nics": "eno4 eno5",
+    "rdma_ips": "100.1.1.11/24 100.1.2.31/24",
+    "hugepages_1g": "100",
+    "system_disk": "/dev/sda",
+    "data_disks": "",
+    "dirs": "/data /dpdk-data",
+    "bmc_ip": "172.16.0.11"
+  },
+  "aa:bb:cc:22:00:01": {
+    "hostname_new": "slave-01",
+    "role": "slave",
+    "ctrl_nic": "eno1",
+    "ctrl_ip": "172.16.3.51/24",
+    "ctrl_gw": "172.16.3.1",
+    "rdma_nics": "eno2",
+    "rdma_ips": "100.1.1.51/24",
+    "system_disk": "/dev/sda",
+    "data_disks": "",
+    "dirs": "/data",
+    "bmc_ip": "172.16.0.51"
+  }
+}

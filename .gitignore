@@ -1,0 +1,56 @@
+# ── Frontend ────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+
+# ── Backend - Python 缓存 ───────────────────────────────────
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/**/*.pyc
+*.pyc
+*.pyo
+__pycache__/
+
+# ── Backend - 数据库 / 运行时日志 ───────────────────────────
+backend/cluster_manager.db
+backend/cluster_manager.db-journal
+backend/cluster_manager.log
+backend/*.log
+
+# ── Backend - PyInstaller 构建产物 ──────────────────────────
+backend/build/
+backend/dist/
+
+# Vite 构建后的前端静态资源(由 npm run build 生成, 不入库)
+backend/static/
+
+# ── Backend - 运行时数据目录 ────────────────────────────────
+# ISO 文件 (PXE Host 装机镜像, 体积大不入库)
+backend/iso/
+# nodes.json / pxe_host.json 含敏感信息(MAC / BMC 凭据)
+backend/pxe_data/
+backend/pxe_host.json
+# SSH 凭据 (含明文密码), 仅本地运行时持久化
+backend/ssh_credentials.json
+
+# ── 发布产物 ────────────────────────────────────────────────
+cluster-manager-windows.zip
+cluster-manager-deploy.zip
+cluster-manager-linux-arm64.tar.gz
+*.tar.gz
+
+# ── Python 虚拟环境 ─────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── IDE / 编辑器 ────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── 操作系统 ────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

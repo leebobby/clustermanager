@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #0f1117;
+  color: #e2e8f0;
+  padding: 24px;
+}
+h1 { text-align:center; font-size:18px; font-weight:700; color:#f0f4ff; margin-bottom:4px; }
+.sub { text-align:center; font-size:12px; color:#64748b; margin-bottom:20px; }
+
+.tabs { display:flex; gap:4px; justify-content:center; margin-bottom:20px; flex-wrap:wrap; }
+.tab {
+  padding:7px 14px; border-radius:8px; border:1px solid #1e293b;
+  background:#0f1117; color:#64748b; cursor:pointer; font-size:12px; transition:all 0.2s;
+}
+.tab:hover { background:#1e293b; color:#94a3b8; }
+.tab.active { background:#1d4ed8; border-color:#3b82f6; color:#fff; font-weight:600; }
+.panel { display:none; }
+.panel.active { display:block; }
+
+/* ── Layer diagram ── */
+.layer-stack { display:flex; flex-direction:column; gap:3px; max-width:700px; margin:0 auto; }
+.layer {
+  border-radius:10px; padding:12px 20px;
+  display:flex; align-items:center; gap:12px;
+  border: 1px solid;
+}
+.layer-icon { font-size:22px; flex-shrink:0; }
+.layer-title { font-size:13px; font-weight:700; }
+.layer-desc { font-size:11px; color:#94a3b8; margin-top:2px; }
+.layer-tag {
+  margin-left:auto; font-size:10px; padding:3px 8px;
+  border-radius:20px; font-weight:600; flex-shrink:0;
+}
+.l0 { background:#0f172a; border-color:#1e3a5f; }
+.l0 .layer-title { color:#60a5fa; }
+.l0 .layer-tag { background:#1e3a5f; color:#60a5fa; }
+.l1 { background:#0f2318; border-color:#14532d; }
+.l1 .layer-title { color:#4ade80; }
+.l1 .layer-tag { background:#14532d; color:#4ade80; }
+.l2 { background:#1c1407; border-color:#713f12; }
+.l2 .layer-title { color:#fbbf24; }
+.l2 .layer-tag { background:#713f12; color:#fbbf24; }
+.l3a { background:#1a0a2e; border-color:#4c1d95; }
+.l3a .layer-title { color:#c084fc; }
+.l3a .layer-tag { background:#4c1d95; color:#c084fc; }
+.l3b { background:#0c1f2e; border-color:#0c4a6e; }
+.l3b .layer-title { color:#38bdf8; }
+.l3b .layer-tag { background:#0c4a6e; color:#38bdf8; }
+.l3c { background:#1a0a14; border-color:#831843; }
+.l3c .layer-title { color:#f472b6; }
+.l3c .layer-tag { background:#831843; color:#f472b6; }
+.l3d { background:#0f1f0f; border-color:#14532d; }
+.l3d .layer-title { color:#86efac; }
+.l3d .layer-tag { background:#14532d; color:#86efac; }
+
+.split-label {
+  text-align:center; font-size:11px; color:#64748b;
+  padding:6px 0; border-top:1px dashed #1e293b; margin-top:4px;
+}
+.branch-row { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:6px; }
+
+/* ── Build flow ── */
+.flow-row { display:flex; align-items:stretch; gap:0; }
+.flow-node {
+  background:#1e293b; border:1px solid #334155; border-radius:10px;
+  padding:12px 10px; flex:1; text-align:center;
+}
+.flow-node h4 { font-size:11px; font-weight:700; margin-bottom:6px; }
+.flow-node p { font-size:10px; color:#64748b; line-height:1.5; }
+.flow-arrow {
+  display:flex; align-items:center; justify-content:center;
+  padding:0 4px; color:#3b82f6; font-size:18px; flex-shrink:0;
+}
+.flow-section { margin-bottom:16px; }
+.flow-section h3 {
+  font-size:12px; font-weight:700; color:#94a3b8;
+  margin-bottom:8px; padding-left:4px;
+  border-left:3px solid #3b82f6;
+  padding-left:8px;
+}
+.cmd-block {
+  background:#0f1117; border:1px solid #1e293b; border-radius:8px;
+  padding:10px 12px; font-family:monospace; font-size:11px;
+  color:#7dd3fc; line-height:1.9; margin-top:8px; overflow-x:auto;
+}
+.cmd-comment { color:#334155; }
+.cmd-key { color:#f0abfc; }
+
+/* ── Role config table ── */
+.role-grid { display:grid; grid-template-columns:140px 1fr 1fr 1fr 1fr; gap:1px; background:#1e293b; border-radius:10px; overflow:hidden; }
+.rg-cell {
+  background:#0f1117; padding:10px 10px; font-size:11px;
+}
+.rg-header { background:#1e293b; font-weight:700; font-size:11px; }
+.rg-row-header { background:#141c2e; color:#94a3b8; font-weight:600; }
+.r-compute { color:#38bdf8; }
+.r-storage { color:#f472b6; }
+.r-db { color:#86efac; }
+.r-mgmt { color:#c084fc; }
+.check { color:#4ade80; }
+.cross { color:#f87171; }
+.val { color:#e2e8f0; }
+
+/* ── Firstboot ── */
+.fb-flow { display:flex; flex-direction:column; gap:8px; }
+.fb-step {
+  display:grid; grid-template-columns:28px 1fr; gap:10px; align-items:start;
+}
+.fb-num {
+  width:28px; height:28px; border-radius:50%; background:#1d4ed8;
+  display:flex; align-items:center; justify-content:center;
+  font-size:12px; font-weight:700; flex-shrink:0;
+}
+.fb-content { background:#1e293b; border:1px solid #334155; border-radius:8px; padding:10px 12px; }
+.fb-content h4 { font-size:12px; font-weight:700; margin-bottom:4px; }
+.fb-content p { font-size:11px; color:#94a3b8; line-height:1.5; }
+</style>
+</head>
+<body>
+
+<h1>🏗️ 私有黄金镜像方案设计</h1>
+<p class="sub">Base Image + 角色分层 + firstboot 三段式架构</p>
+
+<div class="tabs">
+  <div class="tab active" onclick="sw('layer')">① 镜像分层设计</div>
+  <div class="tab" onclick="sw('build')">② 构建流程</div>
+  <div class="tab" onclick="sw('role')">③ 四种角色差异</div>
+  <div class="tab" onclick="sw('firstboot')">④ firstboot 机制</div>
+</div>
+
+<!-- Panel 1: Layer -->
+<div id="panel-layer" class="panel active">
+  <div class="layer-stack">
+
+    <div class="layer l0">
+      <div class="layer-icon">📦</div>
+      <div>
+        <div class="layer-title">Layer 0 — 官方基础 OS 镜像</div>
+        <div class="layer-desc">Rocky Linux 9 / Ubuntu 22.04 DVD ISO，原始未改动，只用来提供软件包源</div>
+      </div>
+      <div class="layer-tag">只读 · 不修改</div>
+    </div>
+
+    <div style="text-align:center;font-size:18px;color:#334155;padding:2px">↓ chroot 构建</div>
+
+    <div class="layer l1">
+      <div class="layer-icon">🧱</div>
+      <div>
+        <div class="layer-title">Layer 1 — Base Golden Image（所有角色共享）</div>
+        <div class="layer-desc">100GE 网卡驱动 · 内核参数 · NTP/DNS · SSH 公钥 · 监控 agent · 基础目录结构 · 大页内存 grub 参数 · 安全基线（SELinux/firewalld）· 禁用不需要的服务</div>
+      </div>
+      <div class="layer-tag">共享 · 约 4-6GB</div>
+    </div>
+
+    <div style="text-align:center;font-size:18px;color:#334155;padding:2px">↓ 角色脚本叠加</div>
+
+    <div class="split-label">↙ 四种角色分支（在同一 Base 上叠加不同配置） ↘</div>
+
+    <div class="branch-row">
+      <div class="layer l2" style="flex-direction:column;align-items:flex-start;gap:6px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="layer-icon" style="font-size:16px">⚙️</div>
+          <div class="layer-title">计算节点</div>
+        </div>
+        <div class="layer-desc">CPU 亲和性<br>NUMA 绑定<br>大页内存<br>k8s worker 组件<br>/data /scratch 目录</div>
+        <div class="layer-tag">compute.img</div>
+      </div>
+      <div class="layer l3a" style="flex-direction:column;align-items:flex-start;gap:6px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="layer-icon" style="font-size:16px">💾</div>
+          <div class="layer-title">存储节点</div>
+        </div>
+        <div class="layer-desc">Ceph/LVM 包<br>磁盘调度 deadline<br>多路径 multipath<br>/data/osd 目录<br>IO 调优参数</div>
+        <div class="layer-tag">storage.img</div>
+      </div>
+      <div class="layer l3b" style="flex-direction:column;align-items:flex-start;gap:6px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="layer-icon" style="font-size:16px">🗄️</div>
+          <div class="layer-title">数据库节点</div>
+        </div>
+        <div class="layer-desc">PostgreSQL/MySQL<br>大页内存调大<br>IO 调度 noop<br>shared memory 调优<br>/data/db /backup 目录</div>
+        <div class="layer-tag">database.img</div>
+      </div>
+      <div class="layer l3c" style="flex-direction:column;align-items:flex-start;gap:6px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="layer-icon" style="font-size:16px">🔧</div>
+          <div class="layer-title">管控节点</div>
+        </div>
+        <div class="layer-desc">k8s master 组件<br>etcd<br>haproxy/keepalived<br>容器镜像仓库<br>/etc/kubernetes 目录</div>
+        <div class="layer-tag">mgmt.img</div>
+      </div>
+    </div>
+
+    <div style="text-align:center;font-size:18px;color:#334155;padding:2px">↓ 部署时</div>
+
+    <div class="layer" style="background:#0f1117;border-color:#334155;flex-direction:column;gap:8px">
+      <div style="display:flex;align-items:center;gap:12px;width:100%">
+        <div class="layer-icon">🚀</div>
+        <div>
+          <div class="layer-title" style="color:#e2e8f0">firstboot.service（systemd oneshot）</div>
+          <div class="layer-desc">运行一次后自删：设置 hostname · 配置静态 IP · 从 PXE 服务器拉取角色参数 · 执行 kubeadm join / ceph osd prepare 等加入集群动作</div>
+        </div>
+        <div class="layer-tag" style="background:#1e293b;color:#94a3b8">运行一次 · 自删</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Panel 2: Build Flow -->
+<div id="panel-build" class="panel">
+
+  <div class="flow-section">
+    <h3>Step 1 — 准备构建环境（参考机 或 容器/chroot）</h3>
+    <div class="flow-row">
+      <div class="flow-node" style="border-color:#1d4ed8">
+        <h4 style="color:#60a5fa">方式 A<br>参考机</h4>
+        <p>在一台真实硬件上装好 OS，配置完所有东西，然后用 partclone 导出整盘镜像。最真实，驱动测试到位。</p>
+      </div>
+      <div class="flow-arrow">vs</div>
+      <div class="flow-node" style="border-color:#059669">
+        <h4 style="color:#4ade80">方式 B<br>chroot 构建</h4>
+        <p>在 PXE 服务器上 mount loop 基础 ISO，dnf/apt install 到一个 chroot 目录，最后 dd 成镜像。可脚本化重复构建，推荐用于 Base 层。</p>
+      </div>
+    </div>
+    <div class="cmd-block">
+<span class="cmd-comment"># 方式 B: chroot 构建 Base 镜像示例</span>
+<span class="cmd-key">BUILDROOT</span>=/opt/buildroot
+mkdir -p $BUILDROOT
+
+<span class="cmd-comment"># 挂载 OS ISO 作为包源</span>
+mount -o loop Rocky-9-latest-x86_64-dvd.iso /mnt/iso
+dnf --installroot=$BUILDROOT --releasever=9 \
+    --repo=file:///mnt/iso \
+    groupinstall "Minimal Install" -y
+
+<span class="cmd-comment"># 挂载 proc/sys/dev（chroot 必须）</span>
+mount --bind /proc $BUILDROOT/proc
+mount --bind /sys  $BUILDROOT/sys
+mount --bind /dev  $BUILDROOT/dev
+
+<span class="cmd-comment"># 进入 chroot 执行配置</span>
+chroot $BUILDROOT /bin/bash -c "
+  <span class="cmd-comment"># 安装 100GE 网卡驱动（mlx5/ixgbe 等）</span>
+  rpm -ivh /tmp/drivers/mlx5-*.rpm
+  modprobe mlx5_core
+  echo 'mlx5_core' >> /etc/modules-load.d/mlx5.conf
+
+  <span class="cmd-comment"># 大页内存</span>
+  sed -i 's/GRUB_CMDLINE_LINUX=\"/GRUB_CMDLINE_LINUX=\"default_hugepagesz=1G hugepagesz=1G hugepages=64 /' /etc/default/grub
+  grub2-mkconfig -o /boot/grub2/grub.cfg
+
+  <span class="cmd-comment"># 内核调优参数</span>
+  cat >> /etc/sysctl.d/99-base.conf << 'EOF'
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.ipv4.ip_forward = 1
+vm.swappiness = 0
+EOF
+
+  <span class="cmd-comment"># SSH 公钥（管理节点）</span>
+  mkdir -p /root/.ssh && chmod 700 /root/.ssh
+  echo 'ssh-rsa AAAA...YOUR_KEY...' > /root/.ssh/authorized_keys
+  chmod 600 /root/.ssh/authorized_keys
+
+  <span class="cmd-comment"># 安装 firstboot service</span>
+  cp /tmp/firstboot.sh /usr/local/bin/firstboot.sh
+  chmod +x /usr/local/bin/firstboot.sh
+  cp /tmp/firstboot.service /etc/systemd/system/
+  systemctl enable firstboot
+"
+    </div>
+  </div>
+
+  <div class="flow-section">
+    <h3>Step 2 — 叠加角色配置（在 BUILDROOT 基础上 patch）</h3>
+    <div class="cmd-block">
+<span class="cmd-comment"># 以"计算节点"为例，在 base buildroot 上叠加</span>
+apply_role() {
+  local ROLE=$1  <span class="cmd-comment"># compute / storage / database / mgmt</span>
+  cp -a $BUILDROOT ${BUILDROOT}-${ROLE}
+  chroot ${BUILDROOT}-${ROLE} /bin/bash /tmp/roles/${ROLE}.sh
+}
+
+apply_role compute
+apply_role storage
+apply_role database
+apply_role mgmt
+    </div>
+  </div>
+
+  <div class="flow-section">
+    <h3>Step 3 — 打包为压缩镜像</h3>
+    <div class="cmd-block">
+<span class="cmd-comment"># 方法 A: tar 打包（推荐，灵活，支持增量更新）</span>
+tar -czf /srv/images/base-v1.0.tar.zst \
+    --zstd --numeric-owner -C $BUILDROOT .
+
+<span class="cmd-comment"># 方法 B: partclone 块设备镜像（适合已装好的参考机）</span>
+partclone.ext4 -c -s /dev/sda3 | zstd > /srv/images/compute-v1.0.img.zst
+
+<span class="cmd-comment"># 校验文件</span>
+sha256sum /srv/images/*.zst > /srv/images/SHA256SUMS
+
+<span class="cmd-comment"># 放到 HTTP 服务器</span>
+<span class="cmd-comment"># 访问：http://10.0.0.1/images/compute-v1.0.img.zst</span>
+    </div>
+  </div>
+
+  <div class="flow-section">
+    <h3>Step 4 — 构建极简部署 initrd</h3>
+    <div class="cmd-block">
+<span class="cmd-comment"># 极简 initrd 只需要：busybox + wget/curl + zstd + partclone + lvm/mdadm</span>
+<span class="cmd-comment"># 约 30-50MB，用 dracut 定制或手工构建</span>
+
+dracut --force --no-hostonly \
+  --add "network base" \
+  --omit "plymouth biosdevname" \
+  --install "wget zstd partclone.ext4 sgdisk mkfs.ext4 mkfs.xfs" \
+  /var/lib/tftpboot/deploy-initrd.img \
+  $(uname -r)
+    </div>
+  </div>
+
+</div>
+
+<!-- Panel 3: Role diff -->
+<div id="panel-role" class="panel">
+  <div style="margin-bottom:12px;font-size:12px;color:#64748b;">
+    Base 镜像包含所有角色的共同部分，角色脚本只写差异配置，保持 DRY 原则。
+  </div>
+  <div class="role-grid">
+    <div class="rg-cell rg-header">配置项</div>
+    <div class="rg-cell rg-header r-compute">⚙️ 计算节点</div>
+    <div class="rg-cell rg-header r-storage">💾 存储节点</div>
+    <div class="rg-cell rg-header r-db">🗄️ 数据库节点</div>
+    <div class="rg-cell rg-header r-mgmt">🔧 管控节点</div>
+
+    <!-- OS & kernel -->
+    <div class="rg-cell rg-row-header">OS 基础包</div>
+    <div class="rg-cell"><span class="check">✓</span> <span class="val">Base 共享</span></div>
+    <div class="rg-cell"><span class="check">✓</span> <span class="val">Base 共享</span></div>
+    <div class="rg-cell"><span class="check">✓</span> <span class="val">Base 共享</span></div>
+    <div class="rg-cell"><span class="check">✓</span> <span class="val">Base 共享</span></div>
+
+    <div class="rg-cell rg-row-header">100GE 驱动</div>
+    <div class="rg-cell"><span class="check">✓</span> <span class="val">Base 共享</span></div>
+    <div class="rg-cell"><span class="check">✓</span> <span class="val">Base 共享</span></div>
+    <div class="rg-cell"><span class="check">✓</span> <span class="val">Base 共享</span></div>
+    <div class="rg-cell"><span class="check">✓</span> <span class="val">Base 共享</span></div>
+
+    <div class="rg-cell rg-row-header">大页内存 grub</div>
+    <div class="rg-cell"><span class="val">1G×64页</span></div>
+    <div class="rg-cell"><span class="val">1G×16页</span></div>
+    <div class="rg-cell"><span class="val">1G×128页</span></div>
+    <div class="rg-cell"><span class="val">1G×8页</span></div>
+
+    <div class="rg-cell rg-row-header">IO 调度器</div>
+    <div class="rg-cell"><span class="val">mq-deadline</span></div>
+    <div class="rg-cell"><span class="val">deadline</span></div>
+    <div class="rg-cell"><span class="val">noop/none</span></div>
+    <div class="rg-cell"><span class="val">mq-deadline</span></div>
+
+    <div class="rg-cell rg-row-header">NUMA 策略</div>
+    <div class="rg-cell"><span class="val">numactl 绑定</span></div>
+    <div class="rg-cell"><span class="cross">—</span></div>
+    <div class="rg-cell"><span class="val">numactl 绑定</span></div>
+    <div class="rg-cell"><span class="cross">—</span></div>
+
+    <div class="rg-cell rg-row-header">额外软件包</div>
+    <div class="rg-cell"><span class="val">containerd kubelet</span></div>
+    <div class="rg-cell"><span class="val">ceph-osd lvm2 multipath</span></div>
+    <div class="rg-cell"><span class="val">postgresql / mysql-server</span></div>
+    <div class="rg-cell"><span class="val">kubeadm kubectl etcd haproxy</span></div>
+
+    <div class="rg-cell rg-row-header">sysctl 调优</div>
+    <div class="rg-cell"><span class="val">net/cpu 优化</span></div>
+    <div class="rg-cell"><span class="val">IO/net 优化</span></div>
+    <div class="rg-cell"><span class="val">shmmax/shmall 调大</span></div>
+    <div class="rg-cell"><span class="val">net 基础</span></div>
+
+    <div class="rg-cell rg-row-header">业务目录</div>
+    <div class="rg-cell"><span class="val">/data /scratch</span></div>
+    <div class="rg-cell"><span class="val">/data/osd /data/journal</span></div>
+    <div class="rg-cell"><span class="val">/data/db /backup /archive</span></div>
+    <div class="rg-cell"><span class="val">/etc/kubernetes /opt/registry</span></div>
+
+    <div class="rg-cell rg-row-header">禁用服务</div>
+    <div class="rg-cell"><span class="val">swap/NetworkManager</span></div>
+    <div class="rg-cell"><span class="val">swap/irqbalance</span></div>
+    <div class="rg-cell"><span class="val">swap/THP</span></div>
+    <div class="rg-cell"><span class="val">swap</span></div>
+
+    <div class="rg-cell rg-row-header">firstboot 动作</div>
+    <div class="rg-cell"><span class="val">kubeadm join --worker</span></div>
+    <div class="rg-cell"><span class="val">ceph osd prepare</span></div>
+    <div class="rg-cell"><span class="val">初始化 DB 实例</span></div>
+    <div class="rg-cell"><span class="val">kubeadm init/join --master</span></div>
+
+    <div class="rg-cell rg-row-header">镜像文件名</div>
+    <div class="rg-cell"><span class="val r-compute">compute-v1.0.img</span></div>
+    <div class="rg-cell"><span class="val r-storage">storage-v1.0.img</span></div>
+    <div class="rg-cell"><span class="val r-db">database-v1.0.img</span></div>
+    <div class="rg-cell"><span class="val r-mgmt">mgmt-v1.0.img</span></div>
+  </div>
+  <div style="margin-top:12px;background:#1e293b;border-radius:8px;padding:12px;font-size:11px;color:#94a3b8;line-height:1.7;">
+    <strong style="color:#fbbf24">关键设计原则：</strong> 四个镜像文件相互独立，互不依赖。Base 层的修改通过重新运行构建脚本同时更新四个镜像，角色脚本只维护各自的差异配置，保持 100-200 行以内。镜像版本号管理用 Git 跟踪构建脚本，不跟踪镜像文件本身（文件太大）。
+  </div>
+</div>
+
+<!-- Panel 4: firstboot -->
+<div id="panel-firstboot" class="panel">
+  <div style="margin-bottom:14px;font-size:12px;color:#64748b;line-height:1.7;">
+    firstboot.service 是一个 systemd oneshot 服务，镜像里预装，第一次启动时执行，执行完毕后自删并 disable 自身，永不再运行。它承担所有"机器级"的个性化动作，即镜像里无法预知的信息：IP、hostname、加入集群的 token 等。
+  </div>
+  <div class="fb-flow">
+
+    <div class="fb-step">
+      <div class="fb-num">1</div>
+      <div class="fb-content">
+        <h4 style="color:#60a5fa">探测自身身份</h4>
+        <p>读取本机 MAC 地址，向 PXE 服务器查询：<code style="background:#0f1117;padding:1px 5px;border-radius:3px">curl http://10.0.0.1/api/node-config?mac=aa:bb:cc:dd:ee:ff</code><br>
+        服务器返回 JSON：hostname、static IP、gateway、role、cluster_token。PXE 服务器维护一张 MAC→配置 的静态表（简单 JSON 文件即可）。</p>
+      </div>
+    </div>
+
+    <div class="fb-step">
+      <div class="fb-num">2</div>
+      <div class="fb-content">
+        <h4 style="color:#60a5fa">设置 hostname 和静态 IP</h4>
+        <p>hostnamectl set-hostname compute-01<br>
+        用 nmcli 或直接写 /etc/NetworkManager/system-connections/ 配置静态 IP，然后 systemctl restart NetworkManager。</p>
+      </div>
+    </div>
+
+    <div class="fb-step">
+      <div class="fb-num">3</div>
+      <div class="fb-content">
+        <h4 style="color:#60a5fa">执行角色特定的加入动作</h4>
+        <p>根据 role 字段分支执行：<br>
+        compute/mgmt → <code style="background:#0f1117;padding:1px 5px;border-radius:3px">kubeadm join ...</code><br>
+        storage → <code style="background:#0f1117;padding:1px 5px;border-radius:3px">ceph-volume lvm create ...</code><br>
+        database → <code style="background:#0f1117;padding:1px 5px;border-radius:3px">postgresql-setup --initdb</code></p>
+      </div>
+    </div>
+
+    <div class="fb-step">
+      <div class="fb-num">4</div>
+      <div class="fb-content">
+        <h4 style="color:#60a5fa">上报完成状态，自删</h4>
+        <p>curl 通知 PXE 服务器该节点已就绪，然后：<br>
+        <code style="background:#0f1117;padding:1px 5px;border-radius:3px">systemctl disable firstboot && rm /etc/systemd/system/firstboot.service</code><br>
+        此后节点正常运行，firstboot 永远不会再执行。</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="margin-top:14px">
+    <div style="font-size:12px;font-weight:700;color:#94a3b8;margin-bottom:8px;padding-left:8px;border-left:3px solid #3b82f6">PXE 服务器的 node-config API（极简实现）</div>
+    <div class="cmd-block">
+<span class="cmd-comment"># /srv/node-config.json — MAC 到配置的静态映射表</span>
+{
+  "aa:bb:cc:dd:ee:01": {
+    "hostname": "compute-01",
+    "ip": "10.1.0.101",
+    "gateway": "10.1.0.1",
+    "role": "compute",
+    "cluster_token": "abc123.xyz..."
+  },
+  "aa:bb:cc:dd:ee:02": {
+    "hostname": "storage-01",
+    "ip": "10.1.0.201",
+    "role": "storage"
+  }
+}
+
+<span class="cmd-comment"># 用 Python 起一个极简 HTTP API，30 行搞定</span>
+<span class="cmd-comment"># 或者直接用 nginx + lua，根据 ?mac= 参数返回对应 JSON 片段</span>
+    </div>
+  </div>
+</div>
+
+<script>
+function sw(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

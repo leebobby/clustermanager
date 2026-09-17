@@ -1,0 +1,19 @@
+[Unit]
+Description=Cluster Manager Service
+Documentation=https://github.com/your-org/cluster-manager
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cluster-manager
+ExecStart=/opt/cluster-manager/cluster-manager
+Restart=on-failure
+RestartSec=5
+# 环境变量覆盖监听端口（默认 8000）
+# Environment=CLUSTER_MANAGER_PORT=8080
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cluster-manager
+
+[Install]
+WantedBy=multi-user.target

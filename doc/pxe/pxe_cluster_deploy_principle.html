@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0f1117;
+    color: #e2e8f0;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  h1 {
+    text-align: center;
+    font-size: 20px;
+    font-weight: 700;
+    color: #f0f4ff;
+    margin-bottom: 6px;
+    letter-spacing: 1px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 12px;
+    color: #64748b;
+    margin-bottom: 24px;
+  }
+
+  /* Tab navigation */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    justify-content: center;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+  .tab {
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1px solid #1e293b;
+    background: #0f1117;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+  }
+  .tab:hover { background: #1e293b; color: #94a3b8; }
+  .tab.active {
+    background: #1d4ed8;
+    border-color: #3b82f6;
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ── Panel 1: Architecture ── */
+  .arch-grid {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 16px;
+  }
+  .server-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .server-card h3 {
+    font-size: 13px;
+    font-weight: 700;
+    color: #60a5fa;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .service-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: 8px;
+    background: #0f1117;
+    border-radius: 8px;
+    border: 1px solid #1e293b;
+  }
+  .service-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    min-width: 48px;
+    text-align: center;
+  }
+  .badge-dhcp { background: #7c3aed; color: #e9d5ff; }
+  .badge-tftp { background: #0891b2; color: #cffafe; }
+  .badge-http { background: #059669; color: #d1fae5; }
+  .badge-ks   { background: #d97706; color: #fef3c7; }
+  .service-desc { font-size: 11px; color: #94a3b8; line-height: 1.4; }
+
+  .nodes-area {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .net-bus {
+    background: linear-gradient(90deg, #1d4ed8 0%, #7c3aed 100%);
+    border-radius: 8px;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .nodes-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 8px;
+  }
+  .node-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 10px 8px;
+    text-align: center;
+    transition: all 0.2s;
+  }
+  .node-card:hover { border-color: #60a5fa; transform: translateY(-2px); }
+  .node-icon { font-size: 24px; margin-bottom: 4px; }
+  .node-name { font-size: 11px; font-weight: 600; color: #e2e8f0; }
+  .node-role { font-size: 10px; color: #64748b; margin-top: 2px; }
+  .node-master { border-top: 2px solid #f59e0b; }
+  .node-worker { border-top: 2px solid #10b981; }
+
+  /* ── Panel 2: Boot Flow ── */
+  .flow-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .flow-step {
+    display: grid;
+    grid-template-columns: 36px 1fr;
+    gap: 0 12px;
+    position: relative;
+  }
+  .step-line {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .step-num {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+    flex-shrink: 0;
+    z-index: 1;
+  }
+  .step-connector {
+    width: 2px;
+    flex: 1;
+    min-height: 20px;
+    background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+  }
+  .step-content {
+    padding: 0 0 20px 0;
+  }
+  .step-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    margin-top: 6px;
+  }
+  .step-title { font-size: 14px; font-weight: 700; }
+  .step-proto {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-weight: 600;
+  }
+  .step-body {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .step-body p { font-size: 12px; color: #94a3b8; line-height: 1.7; }
+  .step-body code {
+    display: inline-block;
+    background: #0f1117;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    color: #7dd3fc;
+  }
+  .msg-flow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+  .msg-box {
+    background: #0f1117;
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11px;
+    color: #cbd5e1;
+  }
+  .msg-arrow { color: #3b82f6; font-size: 16px; }
+
+  /* ── Panel 3: Protocol Deep Dive ── */
+  .proto-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .proto-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 14px;
+  }
+  .proto-card h3 {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .proto-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid #0f1117;
+    font-size: 11px;
+  }
+  .proto-key { color: #64748b; }
+  .proto-val { color: #e2e8f0; font-family: monospace; }
+  .highlight { color: #60a5fa; font-weight: 600; }
+
+  /* ── Panel 4: Kickstart ── */
+  .ks-flow {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+  }
+  .ks-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 14px;
+  }
+  .ks-card h3 {
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: #f0abfc;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ks-item {
+    font-size: 11px;
+    color: #94a3b8;
+    padding: 4px 0;
+    border-bottom: 1px solid #0f1117;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .ks-item::before { content: '▸'; color: #7c3aed; flex-shrink: 0; }
+
+  /* ── Panel 5: Timeline ── */
+  .timeline {
+    position: relative;
+    padding-left: 24px;
+  }
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 6px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(180deg, #1d4ed8, #7c3aed, #059669);
+  }
+  .tl-item {
+    position: relative;
+    margin-bottom: 14px;
+  }
+  .tl-dot {
+    position: absolute;
+    left: -21px;
+    top: 8px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid;
+  }
+  .tl-time {
+    font-size: 10px;
+    color: #64748b;
+    margin-bottom: 2px;
+  }
+  .tl-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .tl-desc {
+    font-size: 11px;
+    color: #94a3b8;
+    line-height: 1.5;
+  }
+
+  @media (max-width: 600px) {
+    .arch-grid { grid-template-columns: 1fr; }
+    .proto-grid { grid-template-columns: 1fr; }
+    .ks-flow { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<h1>🖧 PXE 集群部署原理</h1>
+<p class="subtitle">Preboot Execution Environment — 网络启动与自动化装机全解析</p>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('arch')">① 系统架构</div>
+  <div class="tab" onclick="switchTab('flow')">② 启动流程</div>
+  <div class="tab" onclick="switchTab('proto')">③ 协议详解</div>
+  <div class="tab" onclick="switchTab('ks')">④ 自动化安装</div>
+  <div class="tab" onclick="switchTab('timeline')">⑤ 时间线</div>
+</div>
+
+<!-- Panel 1: Architecture -->
+<div id="panel-arch" class="panel active">
+  <div class="arch-grid">
+    <div>
+      <div class="server-card">
+        <h3>🗄️ PXE 服务器</h3>
+        <div class="service-item">
+          <span class="service-badge badge-dhcp">DHCP</span>
+          <div class="service-desc">分配 IP 地址，通过 Option 66/67 告知节点 TFTP 服务器地址和引导文件名</div>
+        </div>
+        <div class="service-item">
+          <span class="service-badge badge-tftp">TFTP</span>
+          <div class="service-desc">传输引导加载程序（pxelinux.0）、内核（vmlinuz）、初始内存盘（initrd.img）</div>
+        </div>
+        <div class="service-item">
+          <span class="service-badge badge-http">HTTP</span>
+          <div class="service-desc">承载 OS 安装镜像（repo），速度远快于 TFTP，供安装程序下载软件包</div>
+        </div>
+        <div class="service-item">
+          <span class="service-badge badge-ks">KS</span>
+          <div class="service-desc">Kickstart/Preseed 自动应答文件，定义分区、用户、包、脚本等，实现无人值守安装</div>
+        </div>
+      </div>
+    </div>
+    <div class="nodes-area">
+      <div class="net-bus">
+        <span>🔌</span>
+        <span>部署网络 — 10.0.0.0/24（独立 VLAN，与生产网络隔离）</span>
+      </div>
+      <div style="font-size:11px;color:#64748b;margin: 2px 0 6px 4px;">所有节点通过此网络 PXE 启动、装机、注册</div>
+      <div class="nodes-row">
+        <div class="node-card node-master">
+          <div class="node-icon">🟡</div>
+          <div class="node-name">master-01</div>
+          <div class="node-role">Control Plane</div>
+        </div>
+        <div class="node-card node-master">
+          <div class="node-icon">🟡</div>
+          <div class="node-name">master-02</div>
+          <div class="node-role">Control Plane</div>
+        </div>
+        <div class="node-card node-master">
+          <div class="node-icon">🟡</div>
+          <div class="node-name">master-03</div>
+          <div class="node-role">Control Plane</div>
+        </div>
+        <div class="node-card node-worker">
+          <div class="node-icon">🟢</div>
+          <div class="node-name">worker-01</div>
+          <div class="node-role">Data Plane</div>
+        </div>
+        <div class="node-card node-worker">
+          <div class="node-icon">🟢</div>
+          <div class="node-name">worker-02</div>
+          <div class="node-role">Data Plane</div>
+        </div>
+        <div class="node-card node-worker">
+          <div class="node-icon">🟢</div>
+          <div class="node-name">worker-03</div>
+          <div class="node-role">Data Plane</div>
+        </div>
+        <div class="node-card node-worker">
+          <div class="node-icon">🟢</div>
+          <div class="node-name">worker-04</div>
+          <div class="node-role">Data Plane</div>
+        </div>
+        <div class="node-card node-worker">
+          <div class="node-icon">🟢</div>
+          <div class="node-name">worker-05</div>
+          <div class="node-role">Data Plane</div>
+        </div>
+      </div>
+      <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px 14px;font-size:11px;color:#94a3b8;line-height:1.8;">
+        <strong style="color:#60a5fa">核心思想：</strong> 目标节点本身没有 OS，上电后 NIC 固件（PXE ROM）发出 DHCP 广播，从网络获取 IP 和引导程序，加载内核后由 Kickstart 文件驱动全自动安装——整个过程无需插 U 盘或光驱，数十台机器可同时并行装机。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Panel 2: Boot Flow -->
+<div id="panel-flow" class="panel">
+  <div class="flow-container">
+
+    <div class="flow-step">
+      <div class="step-line">
+        <div class="step-num" style="background:#1d4ed8;color:#fff">1</div>
+        <div class="step-connector"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-header">
+          <span class="step-title">BIOS/UEFI 选择网络启动</span>
+          <span class="step-proto" style="background:#1d4ed8;color:#bfdbfe">固件层</span>
+        </div>
+        <div class="step-body">
+          <p>服务器上电，BIOS/UEFI 按启动顺序选中 <code>Network Boot (PXE)</code>。NIC 上的 <strong>PXE ROM</strong>（约 32KB 固件）被激活，它内置了一个极简 DHCP 客户端和 TFTP 客户端。此时机器没有 OS，完全靠这块固件运作。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="step-line">
+        <div class="step-num" style="background:#7c3aed;color:#fff">2</div>
+        <div class="step-connector"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-header">
+          <span class="step-title">DHCP 四步握手 — 获取 IP 和引导信息</span>
+          <span class="step-proto" style="background:#7c3aed;color:#e9d5ff">DHCP / UDP</span>
+        </div>
+        <div class="step-body">
+          <div class="msg-flow">
+            <div class="msg-box">① DISCOVER<br><span style="color:#64748b;font-size:10px">广播，我要IP</span></div>
+            <div class="msg-arrow">→</div>
+            <div class="msg-box">② OFFER<br><span style="color:#64748b;font-size:10px">给你10.0.0.101</span></div>
+            <div class="msg-arrow">→</div>
+            <div class="msg-box">③ REQUEST<br><span style="color:#64748b;font-size:10px">我要这个IP</span></div>
+            <div class="msg-arrow">→</div>
+            <div class="msg-box">④ ACK<br><span style="color:#64748b;font-size:10px">确认+引导信息</span></div>
+          </div>
+          <p style="margin-top:8px">DHCP ACK 中携带两个关键 Option：<code>Option 66</code>（next-server，TFTP 服务器 IP）和 <code>Option 67</code>（filename，引导文件路径如 <code>pxelinux.0</code>）。节点凭此知道去哪里下载什么。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="step-line">
+        <div class="step-num" style="background:#0891b2;color:#fff">3</div>
+        <div class="step-connector"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-header">
+          <span class="step-title">TFTP 下载引导加载程序（Bootloader）</span>
+          <span class="step-proto" style="background:#0891b2;color:#cffafe">TFTP / UDP 69</span>
+        </div>
+        <div class="step-body">
+          <p>节点向 TFTP 服务器请求引导文件。TFTP 使用 UDP，无连接、无认证，适合固件级别的简单传输（但速度较慢，大文件后续改用 HTTP）。</p>
+          <p style="margin-top:6px">下载顺序：<code>pxelinux.0</code> → <code>menu.c32</code>（菜单模块）→ 读取 <code>pxelinux.cfg/default</code>（启动菜单配置）→ 节点显示启动菜单。</p>
+          <p style="margin-top:6px"><strong style="color:#7dd3fc">MAC 地址匹配：</strong>pxelinux 按优先级查找配置文件：先找 <code>01-{MAC}</code>，再找 IP 十六进制，最后 fallback 到 <code>default</code>。可为每台机器定制启动行为。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="step-line">
+        <div class="step-num" style="background:#059669;color:#fff">4</div>
+        <div class="step-connector"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-header">
+          <span class="step-title">TFTP 下载内核和初始内存盘</span>
+          <span class="step-proto" style="background:#059669;color:#d1fae5">TFTP / UDP 69</span>
+        </div>
+        <div class="step-body">
+          <p>引导程序根据菜单配置，继续从 TFTP 下载两个核心文件：</p>
+          <p style="margin-top:6px">• <code>vmlinuz</code> — 压缩的 Linux 内核，约 10-15 MB<br>• <code>initrd.img</code> — 初始内存文件系统，包含安装程序（Anaconda/d-i）及基础驱动，约 100-200 MB</p>
+          <p style="margin-top:6px">内核启动参数由菜单中 <code>APPEND</code> 行指定，其中最关键的是 <code>inst.ks=http://...</code>（Kickstart 文件位置）和 <code>inst.repo=http://...</code>（安装镜像位置）。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="step-line">
+        <div class="step-num" style="background:#d97706;color:#fff">5</div>
+        <div class="step-connector"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-header">
+          <span class="step-title">内核启动 → 安装程序运行 → 读取 Kickstart</span>
+          <span class="step-proto" style="background:#d97706;color:#fef3c7">HTTP / Kernel</span>
+        </div>
+        <div class="step-body">
+          <p>内核解压 initrd，启动安装程序（Anaconda）。Anaconda 通过 HTTP 请求 Kickstart 文件，按其中的指令全自动完成：磁盘分区 → 格式化 → 通过 HTTP 拉取 RPM 包 → 安装 → 写入 bootloader → 配置网络/用户/SSH → 执行 %post 脚本。</p>
+          <p style="margin-top:6px"><strong style="color:#fbbf24">全程无交互</strong>，100 台机器可并行执行，互不干扰。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="step-line">
+        <div class="step-num" style="background:#be185d;color:#fff">6</div>
+        <div class="step-connector"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-header">
+          <span class="step-title">安装完成 → 重启 → Ansible 接管</span>
+          <span class="step-proto" style="background:#be185d;color:#fce7f3">SSH / Ansible</span>
+        </div>
+        <div class="step-body">
+          <p>节点安装完毕自动重启，这次从本地磁盘引导进入新系统。%post 脚本已预埋 SSH 公钥，Ansible 可立即 SSH 登录，推送集群配置：主机名、内核参数、容器运行时、Kubernetes 组件，最后执行 <code>kubeadm init/join</code> 组建集群。</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Panel 3: Protocol -->
+<div id="panel-proto" class="panel">
+  <div class="proto-grid">
+    <div class="proto-card">
+      <h3>🔵 DHCP 协议细节</h3>
+      <div class="proto-row"><span class="proto-key">端口</span><span class="proto-val">67 (server) / 68 (client)</span></div>
+      <div class="proto-row"><span class="proto-key">传输层</span><span class="proto-val">UDP 广播</span></div>
+      <div class="proto-row"><span class="proto-key">Option 43</span><span class="proto-val">厂商特定信息</span></div>
+      <div class="proto-row"><span class="proto-key">Option 60</span><span class="proto-val">vendor-class-id（区分BIOS/UEFI）</span></div>
+      <div class="proto-row"><span class="proto-key highlight">Option 66</span><span class="proto-val highlight">next-server (TFTP IP)</span></div>
+      <div class="proto-row"><span class="proto-key highlight">Option 67</span><span class="proto-val highlight">filename (pxelinux.0)</span></div>
+      <div class="proto-row"><span class="proto-key">UEFI区分</span><span class="proto-val">Arch:00007 → grubx64.efi</span></div>
+      <div class="proto-row"><span class="proto-key">固定IP绑定</span><span class="proto-val">host { hardware ethernet MAC; fixed-address IP; }</span></div>
+    </div>
+
+    <div class="proto-card">
+      <h3>🔷 TFTP 协议细节</h3>
+      <div class="proto-row"><span class="proto-key">端口</span><span class="proto-val">69 / UDP</span></div>
+      <div class="proto-row"><span class="proto-key">传输模式</span><span class="proto-val">octet（二进制）</span></div>
+      <div class="proto-row"><span class="proto-key">块大小</span><span class="proto-val">默认 512B，可协商至 1468B</span></div>
+      <div class="proto-row"><span class="proto-key">特点</span><span class="proto-val">无认证、无加密、简单可靠</span></div>
+      <div class="proto-row"><span class="proto-key">缺点</span><span class="proto-val">速度慢，不适合大文件</span></div>
+      <div class="proto-row"><span class="proto-key">传输内容</span><span class="proto-val">pxelinux.0, vmlinuz, initrd</span></div>
+      <div class="proto-row"><span class="proto-key">替代方案</span><span class="proto-val">iPXE 可直接用 HTTP 传输</span></div>
+      <div class="proto-row"><span class="proto-key">根目录</span><span class="proto-val">/var/lib/tftpboot/</span></div>
+    </div>
+
+    <div class="proto-card">
+      <h3>🟢 HTTP 协议角色</h3>
+      <div class="proto-row"><span class="proto-key">端口</span><span class="proto-val">80 / TCP</span></div>
+      <div class="proto-row"><span class="proto-key">用途1</span><span class="proto-val">承载 OS 安装镜像 (repo)</span></div>
+      <div class="proto-row"><span class="proto-key highlight">用途2</span><span class="proto-val highlight">提供 Kickstart 文件</span></div>
+      <div class="proto-row"><span class="proto-key">优势</span><span class="proto-val">支持并发、速度快、断点续传</span></div>
+      <div class="proto-row"><span class="proto-key">镜像挂载</span><span class="proto-val">mount -o loop iso /var/www/html/</span></div>
+      <div class="proto-row"><span class="proto-key">带宽考量</span><span class="proto-val">100节点同装约需 1Gbps 网络</span></div>
+      <div class="proto-row"><span class="proto-key">优化</span><span class="proto-val">可用 squid 缓存加速</span></div>
+    </div>
+
+    <div class="proto-card">
+      <h3>🟣 引导文件体系</h3>
+      <div class="proto-row"><span class="proto-key">pxelinux.0</span><span class="proto-val">BIOS 引导加载程序</span></div>
+      <div class="proto-row"><span class="proto-key">grubx64.efi</span><span class="proto-val">UEFI 引导加载程序</span></div>
+      <div class="proto-row"><span class="proto-key">menu.c32</span><span class="proto-val">文字菜单渲染模块</span></div>
+      <div class="proto-row"><span class="proto-key">vmlinuz</span><span class="proto-val">压缩 Linux 内核</span></div>
+      <div class="proto-row"><span class="proto-key highlight">initrd.img</span><span class="proto-val highlight">内存盘，含安装程序</span></div>
+      <div class="proto-row"><span class="proto-key">pxelinux.cfg/</span><span class="proto-val">启动菜单配置目录</span></div>
+      <div class="proto-row"><span class="proto-key">配置查找顺序</span><span class="proto-val">MAC → IP十六进制 → default</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Panel 4: Kickstart -->
+<div id="panel-ks" class="panel">
+  <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:14px;margin-bottom:14px;">
+    <p style="font-size:13px;color:#94a3b8;line-height:1.7;">
+      <strong style="color:#f0abfc">Kickstart</strong>（RedHat 系）/ <strong style="color:#f0abfc">Preseed</strong>（Debian 系）是安装自动应答文件。安装程序启动时读取这个文件，按其中的声明式指令全程自动完成安装，无需人工交互。一份 Kickstart 文件可驱动成百上千台机器安装出完全一致的系统。
+    </p>
+  </div>
+  <div class="ks-flow">
+    <div class="ks-card">
+      <h3>📋 基础声明段</h3>
+      <div class="ks-item">安装模式：text / graphical</div>
+      <div class="ks-item">语言和键盘布局</div>
+      <div class="ks-item">时区设置</div>
+      <div class="ks-item">Root 密码（哈希）</div>
+      <div class="ks-item">额外用户账号</div>
+      <div class="ks-item">SELinux 和防火墙策略</div>
+      <div class="ks-item">安装完成后动作（reboot/halt）</div>
+    </div>
+    <div class="ks-card">
+      <h3>💾 磁盘和网络段</h3>
+      <div class="ks-item">clearpart 清除磁盘分区</div>
+      <div class="ks-item">autopart 自动分区 / 手动 part 指令</div>
+      <div class="ks-item">LVM 卷组配置</div>
+      <div class="ks-item">文件系统类型（xfs/ext4）</div>
+      <div class="ks-item">网络 DHCP / 静态 IP</div>
+      <div class="ks-item">hostname 设置</div>
+      <div class="ks-item">Bootloader 安装位置</div>
+    </div>
+    <div class="ks-card">
+      <h3>📦 包和脚本段</h3>
+      <div class="ks-item">%packages — 指定安装包组</div>
+      <div class="ks-item">@^minimal-environment 最小安装</div>
+      <div class="ks-item">安装 python3 / ansible / chrony</div>
+      <div class="ks-item">%post — 安装后执行脚本</div>
+      <div class="ks-item">写入 SSH 公钥（授权管理节点）</div>
+      <div class="ks-item">向 PXE 服务器发注册回调</div>
+      <div class="ks-item">%pre — 安装前预处理脚本</div>
+    </div>
+  </div>
+  <div style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:14px;margin-top:14px;font-size:11px;color:#7dd3fc;font-family:monospace;line-height:1.8;">
+    <span style="color:#64748b"># Kickstart 文件结构示意</span><br>
+    <span style="color:#f0abfc">lang</span> en_US.UTF-8<br>
+    <span style="color:#f0abfc">timezone</span> Asia/Singapore --utc<br>
+    <span style="color:#f0abfc">rootpw</span> --iscrypted $6$...<br>
+    <span style="color:#f0abfc">clearpart</span> --all --initlabel<br>
+    <span style="color:#f0abfc">autopart</span> --type=lvm<br>
+    <span style="color:#f0abfc">network</span> --bootproto=dhcp --activate<br>
+    <br>
+    <span style="color:#f0abfc">%packages</span><br>
+    @^minimal-environment<br>
+    python3<br>
+    <span style="color:#f0abfc">%end</span><br>
+    <br>
+    <span style="color:#f0abfc">%post</span><br>
+    mkdir -p /root/.ssh<br>
+    echo "ssh-rsa AAAA..." >> /root/.ssh/authorized_keys<br>
+    curl http://10.0.0.1/api/register -d "ip=$(hostname -I)"<br>
+    <span style="color:#f0abfc">%end</span>
+  </div>
+</div>
+
+<!-- Panel 5: Timeline -->
+<div id="panel-timeline" class="panel">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+    <div>
+      <h3 style="font-size:14px;font-weight:700;color:#60a5fa;margin-bottom:16px;">⏱ 单节点装机时间线</h3>
+      <div class="timeline">
+        <div class="tl-item">
+          <div class="tl-dot" style="background:#1d4ed8;border-color:#3b82f6"></div>
+          <div class="tl-time">T+0s</div>
+          <div class="tl-title" style="color:#60a5fa">上电，PXE ROM 激活</div>
+          <div class="tl-desc">NIC 固件发出 DHCP DISCOVER 广播</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-dot" style="background:#7c3aed;border-color:#a78bfa"></div>
+          <div class="tl-time">T+2s</div>
+          <div class="tl-title" style="color:#a78bfa">DHCP 完成，获得 IP</div>
+          <div class="tl-desc">获得 next-server 和 filename，准备 TFTP</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-dot" style="background:#0891b2;border-color:#22d3ee"></div>
+          <div class="tl-time">T+5s</div>
+          <div class="tl-title" style="color:#22d3ee">下载引导程序</div>
+          <div class="tl-desc">TFTP 传输 pxelinux.0 + 菜单模块</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-dot" style="background:#059669;border-color:#34d399"></div>
+          <div class="tl-time">T+10s</div>
+          <div class="tl-title" style="color:#34d399">下载内核和 initrd</div>
+          <div class="tl-desc">vmlinuz (~12MB) + initrd.img (~150MB)，TFTP 约需 1-3 分钟</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-dot" style="background:#d97706;border-color:#fbbf24"></div>
+          <div class="tl-time">T+3min</div>
+          <div class="tl-title" style="color:#fbbf24">内核启动，Anaconda 运行</div>
+          <div class="tl-desc">读取 Kickstart 文件，开始自动分区</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-dot" style="background:#be185d;border-color:#f472b6"></div>
+          <div class="tl-time">T+5min</div>
+          <div class="tl-title" style="color:#f472b6">HTTP 拉取 RPM 包安装</div>
+          <div class="tl-desc">最小安装约 500MB，耗时取决于网络带宽</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-dot" style="background:#15803d;border-color:#4ade80"></div>
+          <div class="tl-time">T+15min</div>
+          <div class="tl-title" style="color:#4ade80">安装完成，自动重启</div>
+          <div class="tl-desc">%post 脚本执行完毕，节点进入新系统</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-dot" style="background:#0f766e;border-color:#2dd4bf"></div>
+          <div class="tl-time">T+18min</div>
+          <div class="tl-title" style="color:#2dd4bf">Ansible 接管，推送配置</div>
+          <div class="tl-desc">SSH 登录，安装 k8s 组件，加入集群</div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <h3 style="font-size:14px;font-weight:700;color:#60a5fa;margin-bottom:16px;">🔑 核心要点总结</h3>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px;">
+          <div style="font-size:12px;font-weight:700;color:#fbbf24;margin-bottom:6px;">为什么用 TFTP 不用 HTTP 传内核？</div>
+          <div style="font-size:11px;color:#94a3b8;line-height:1.6;">PXE ROM 固件极其简单，只内置了 TFTP 客户端。HTTP 需要 TCP 栈和更复杂的实现。iPXE 是改进方案，支持 HTTP/HTTPS，可链式加载替换原生 PXE ROM。</div>
+        </div>
+        <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px;">
+          <div style="font-size:12px;font-weight:700;color:#34d399;margin-bottom:6px;">如何区分每台机器的角色？</div>
+          <div style="font-size:11px;color:#94a3b8;line-height:1.6;">三种方式：① DHCP 按 MAC 绑定固定 IP，② pxelinux.cfg 按 MAC 文件名定制菜单，③ 统一装机后 Ansible 按 inventory 分组推送不同角色配置（推荐）。</div>
+        </div>
+        <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px;">
+          <div style="font-size:12px;font-weight:700;color:#f472b6;margin-bottom:6px;">大规模部署的瓶颈在哪？</div>
+          <div style="font-size:11px;color:#94a3b8;line-height:1.6;">① TFTP 速度慢 → 用 iPXE + HTTP 改善；② HTTP 服务器带宽 → 用 squid 缓存或部署多个镜像源；③ DHCP 广播风暴 → 独立部署 VLAN 隔离。</div>
+        </div>
+        <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px;">
+          <div style="font-size:12px;font-weight:700;color:#7dd3fc;margin-bottom:6px;">BIOS vs UEFI 的区别？</div>
+          <div style="font-size:11px;color:#94a3b8;line-height:1.6;">BIOS 用 <code style="background:#0f1117;padding:1px 4px;border-radius:3px;font-size:10px">pxelinux.0</code>（syslinux），UEFI 用 <code style="background:#0f1117;padding:1px 4px;border-radius:3px;font-size:10px">grubx64.efi</code>（grub2）。DHCP 通过 vendor-class-identifier（Option 60）区分，服务器端配置条件判断返回不同 filename。</div>
+        </div>
+        <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px;">
+          <div style="font-size:12px;font-weight:700;color:#c084fc;margin-bottom:6px;">安全注意事项</div>
+          <div style="font-size:11px;color:#94a3b8;line-height:1.6;">① 部署网络与生产网络 VLAN 隔离；② DHCP 仅允许已知 MAC 地址；③ Kickstart 密码使用哈希；④ 装机完成后关闭 PXE 启动顺序，防止误触发重装。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+fastapi>=0.104.0
+uvicorn>=0.24.0
+sqlalchemy>=2.0.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+aiohttp>=3.9.0
+python-ipmi>=0.4.0
+paramiko>=3.0.0
+httpx>=0.25.0
+pywebview>=5.0
