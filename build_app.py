@@ -62,6 +62,24 @@ STEP_TOTAL = 6
 
 # ── 输出 ──────────────────────────────────────────────────────────────────────
 
+def _force_utf8_output() -> None:
+    """
+    Windows 上 stdout 被重定向(CI / 管道 / `> build.log`)时, Python 用的是系统
+    ANSI 代码页 —— 英文 Windows 是 cp1252, 编不了中文, 第一行 print 就
+    UnicodeEncodeError 崩掉。统一改成 UTF-8, 实在编不出的字符退化成转义。
+
+    直接连控制台时 Python 走 WriteConsoleW, 本来就不受代码页影响, 这里改了也无害。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
+
+_force_utf8_output()
+
+
 def step(n: int, msg: str) -> None:
     print(f"\n[{n}/{STEP_TOTAL}] {msg}", flush=True)
 
