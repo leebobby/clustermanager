@@ -181,9 +181,18 @@ def test_find_chromium() -> None:
             got = desktop._find_chromium()
         check(got == edge, "App Paths 命中(顺带剥掉两侧引号)", got)
 
+        # 注册表项指向不存在的文件 -> 不能采信它。注意这里不能断言返回空:
+        # 本机真装了 Edge 的话, 函数会继续往标准安装路径找并找到 —— 那是正确行为
+        # (CI 的 Windows runner 就装了 Edge, 这条一开始被我写成断言空值, 挂了)
         with fake_registry({APP_PATHS_EDGE: {None: r"C:\gone\msedge.exe"}}):
             got = desktop._find_chromium()
-        check(got == "", "注册表有值但文件不在 -> 视为未找到", repr(got))
+        check(got != r"C:\gone\msedge.exe",
+              "注册表有值但文件不在 -> 不采信该路径(会继续往下找)", repr(got))
+
+        # 真正的"哪儿都没有": 让所有路径判断都不存在
+        with fake_registry({}), mock.patch.object(os.path, "isfile", lambda _p: False):
+            got = desktop._find_chromium()
+        check(got == "", "注册表空 + 磁盘上也没有 -> 返回空串", repr(got))
 
         # 标准安装路径这一支拼的是 Windows 路径, 在 Linux 上 os.path.join 拼不出
         # 真实文件, 所以换成 ntpath 语义, 断言它构造出的候选路径正确
