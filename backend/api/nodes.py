@@ -18,6 +18,8 @@ class NodeCreate(BaseModel):
     hostname: str
     node_type: str  # master/slave/subswath/gstorage/sensor
     role: Optional[str] = None
+    project: Optional[str] = None
+    machine_type: Optional[str] = None
     mgmt_ip: Optional[str] = None
     mgmt_mac: Optional[str] = None
     bmc_ip: Optional[str] = None
@@ -37,6 +39,8 @@ class NodeUpdate(BaseModel):
     hostname: Optional[str] = None
     node_type: Optional[str] = None
     role: Optional[str] = None
+    project: Optional[str] = None
+    machine_type: Optional[str] = None
     mgmt_ip: Optional[str] = None
     mgmt_mac: Optional[str] = None
     bmc_ip: Optional[str] = None
@@ -60,6 +64,9 @@ class NodeResponse(BaseModel):
     hostname: str
     node_type: str
     role: Optional[str]
+    # 来源模板
+    project: Optional[str] = None
+    machine_type: Optional[str] = None
     # 管理面
     mgmt_ip: Optional[str]
     mgmt_mac: Optional[str]

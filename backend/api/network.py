@@ -232,6 +232,9 @@ def get_topology_graph(db: Session = Depends(get_db)):
             "name": node.hostname,
             "type": node.node_type,
             "status": node.status,
+            # 来源模板, 供前端按项目 / 机台类型归类过滤
+            "project": node.project,
+            "machine_type": node.machine_type,
             "planes": {
                 "management": {
                     "ip": node.mgmt_ip,

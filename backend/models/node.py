@@ -21,6 +21,10 @@ class Node(Base):
     node_type = Column(String(20))  # master/slave/sensor
     role = Column(String(50))
 
+    # 来源模板 — 由「按机台类型添加」写入, 供组网图与运维侧按项目/机台归类
+    project = Column(String(100))
+    machine_type = Column(String(100))
+
     # 管理面 (GE口)
     mgmt_ip = Column(String(45))
     mgmt_mac = Column(String(17))

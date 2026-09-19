@@ -43,6 +43,9 @@ def _run_migrations():
         "ALTER TABLE nodes ADD COLUMN data_status VARCHAR(20) DEFAULT 'offline'",
         # 节点固件版本快照(firstboot 阶段刷固件后回报)
         "ALTER TABLE nodes ADD COLUMN nic_firmware JSON",
+        # 节点来源模板(项目 / 机台类型), 供组网图与运维按机台归类
+        "ALTER TABLE nodes ADD COLUMN project VARCHAR(100)",
+        "ALTER TABLE nodes ADD COLUMN machine_type VARCHAR(100)",
     ]
     with engine.connect() as conn:
         for sql in migrations:

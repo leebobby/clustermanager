@@ -13,6 +13,9 @@
               <el-option label="GStorage" value="gstorage" />
               <el-option label="Sensor" value="sensor" />
             </el-select>
+            <el-select v-model="filterMachine" placeholder="机台" clearable style="width: 150px">
+              <el-option v-for="m in machineOptions" :key="m" :label="m" :value="m" />
+            </el-select>
             <el-select v-model="filterStatus" placeholder="状态" clearable style="width: 100px">
               <el-option label="在线" value="online" />
               <el-option label="离线" value="offline" />
@@ -34,7 +37,7 @@
             </el-button>
             <el-button type="success" plain @click="openApply">
               <el-icon><Files /></el-icon>
-              按型号添加
+              按机台添加
             </el-button>
           </div>
         </div>
@@ -42,6 +45,15 @@
 
       <el-table :data="filteredNodes" stripe>
         <el-table-column prop="hostname" label="主机名" width="130" />
+        <el-table-column label="项目 / 机台" width="150">
+          <template #default="{ row }">
+            <template v-if="row.machine_type">
+              <div class="mt-name">{{ row.machine_type }}</div>
+              <div class="role-text">{{ row.project }}</div>
+            </template>
+            <span v-else class="role-text">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="类型 / 角色" width="110">
           <template #default="{ row }">
             <el-tag :type="nodeTypeTag(row.node_type)" size="small">{{ row.node_type }}</el-tag>
@@ -96,23 +108,27 @@
     </el-card>
 
     <!-- 新增 / 编辑节点对话框 -->
-    <!-- ── 按机台型号批量添加 ─────────────────────────────────────────── -->
-    <el-dialog v-model="applyDialogVisible" title="按机台型号添加节点" width="860px" :close-on-click-modal="false">
+    <!-- ── 按机台类型批量添加 ─────────────────────────────────────────── -->
+    <el-dialog v-model="applyDialogVisible" title="按机台类型添加节点" width="900px" :close-on-click-modal="false">
       <div class="tpl-bar">
+        <el-select v-model="selectedProject" placeholder="选择项目" style="width: 240px" @change="onProjectChange">
+          <el-option v-for="p in projects" :key="p.name" :label="p.name" :value="p.name" />
+        </el-select>
         <el-select
-          v-model="selectedModel"
-          placeholder="选择机台型号"
-          style="width: 280px"
+          v-model="selectedMachine"
+          placeholder="选择机台类型"
+          style="width: 240px"
+          :disabled="!currentProject"
           @change="loadPreview"
         >
           <el-option
-            v-for="t in templates"
-            :key="t.model"
-            :label="t.model"
-            :value="t.model"
+            v-for="m in currentProject?.machine_types || []"
+            :key="m.name"
+            :label="m.name"
+            :value="m.name"
           />
         </el-select>
-        <span class="tpl-desc">{{ currentTemplate?.description }}</span>
+        <span class="tpl-desc">{{ currentMachine?.description || currentProject?.description }}</span>
         <el-button link type="primary" @click="openManage">管理模板</el-button>
       </div>
 
@@ -132,7 +148,7 @@
         stripe
         size="small"
         max-height="380"
-        empty-text="选择型号后显示将创建的节点"
+        empty-text="选择项目和机台类型后显示将创建的节点"
       >
         <el-table-column prop="hostname" label="主机名" width="120" />
         <el-table-column prop="node_type" label="类型" width="95" />
@@ -152,55 +168,53 @@
       </el-table>
 
       <template #footer>
-        <span class="tpl-total">共 {{ preview.total }} 台，IP 已避开库中已占用的地址</span>
+        <span class="tpl-total">
+          共 {{ preview.total }} 台，IP 已避开库中已占用的地址；创建后节点会记录所属项目与机台类型
+        </span>
         <el-button @click="applyDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :disabled="!preview.total"
-          :loading="applying"
-          @click="applyTemplate"
-        >
+        <el-button type="primary" :disabled="!preview.total" :loading="applying" @click="applyTemplate">
           创建这 {{ preview.total }} 台
         </el-button>
       </template>
     </el-dialog>
 
-    <!-- ── 模板维护 ───────────────────────────────────────────────────── -->
-    <el-dialog v-model="manageDialogVisible" title="机台型号模板" width="1280px" :close-on-click-modal="false">
+    <!-- ── 模板维护: 项目 → 机台类型 ──────────────────────────────────── -->
+    <el-dialog v-model="manageDialogVisible" title="节点模板" width="1280px" :close-on-click-modal="false">
       <el-alert
         type="info"
         :closable="false"
         show-icon
         class="tpl-alert"
-        title="模板存在后端的 node_templates.json 文件里，不入数据库。主机名序号与 IP 末段各自独立起算：主机名从「主机名起始」开始，IP 从「IP 起始」开始，两者同步递增。"
+        title="项目定义本项目共用的角色配置（网段、起始序号、协议、规格），机台类型只定义各角色各几台 —— 同一项目下不同机台类型的区别就在服务器台数。模板存后端 node_templates.json，不入数据库。"
       />
 
       <div class="tpl-bar">
-        <el-select v-model="editingModelIndex" placeholder="选择型号" style="width: 280px">
+        <el-select v-model="editingProjectIndex" placeholder="选择项目" style="width: 260px">
           <el-option
-            v-for="(t, i) in draftTemplates"
+            v-for="(p, i) in draftProjects"
             :key="i"
-            :label="t.model || '(未命名)'"
+            :label="p.name || '(未命名项目)'"
             :value="i"
           />
         </el-select>
-        <el-button @click="addModel">新增型号</el-button>
-        <el-button type="danger" plain :disabled="editingModelIndex === null" @click="removeModel">
-          删除此型号
+        <el-button @click="addProject">新增项目</el-button>
+        <el-button type="danger" plain :disabled="editingProjectIndex === null" @click="removeProject">
+          删除此项目
         </el-button>
       </div>
 
-      <template v-if="editingTemplate">
+      <template v-if="editingProject">
         <el-row :gutter="16" class="tpl-meta">
           <el-col :span="8">
-            <el-input v-model="editingTemplate.model" placeholder="型号名称，如 KX-2000" />
+            <el-input v-model="editingProject.name" placeholder="项目名称" />
           </el-col>
           <el-col :span="16">
-            <el-input v-model="editingTemplate.description" placeholder="说明（可选）" />
+            <el-input v-model="editingProject.description" placeholder="项目说明（可选）" />
           </el-col>
         </el-row>
 
-        <el-table :data="editingTemplate.roles" size="small" border max-height="340">
+        <el-divider content-position="left">角色配置（本项目共用）</el-divider>
+        <el-table :data="editingProject.roles" size="small" border max-height="260">
           <el-table-column label="节点类型" width="112">
             <template #default="{ row }">
               <el-select v-model="row.node_type" size="small">
@@ -213,29 +227,26 @@
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="台数" width="74">
+          <el-table-column label="主机名前缀" width="118">
             <template #default="{ row }">
-              <el-input-number v-model="row.count" :min="0" :max="255" size="small" controls-position="right" style="width:100%" />
+              <el-input v-model="row.hostname_prefix" size="small" @change="syncRoleKeys" />
             </template>
           </el-table-column>
-          <el-table-column label="主机名前缀" width="112">
-            <template #default="{ row }"><el-input v-model="row.hostname_prefix" size="small" /></template>
-          </el-table-column>
-          <el-table-column label="主机名起始" width="94">
+          <el-table-column label="主机名起始" width="98">
             <template #default="{ row }">
               <el-input-number v-model="row.hostname_start" :min="0" size="small" controls-position="right" style="width:100%" />
             </template>
           </el-table-column>
-          <el-table-column label="BMC 网段" width="112">
+          <el-table-column label="BMC 网段" width="116">
             <template #default="{ row }"><el-input v-model="row.bmc_prefix" size="small" placeholder="172.16.0." /></template>
           </el-table-column>
-          <el-table-column label="控制面网段" width="112">
+          <el-table-column label="控制面网段" width="116">
             <template #default="{ row }"><el-input v-model="row.ctrl_prefix" size="small" placeholder="172.16.3." /></template>
           </el-table-column>
-          <el-table-column label="数据面网段" width="112">
+          <el-table-column label="数据面网段" width="116">
             <template #default="{ row }"><el-input v-model="row.data_prefix" size="small" placeholder="100.1.1." /></template>
           </el-table-column>
-          <el-table-column label="IP 起始" width="84">
+          <el-table-column label="IP 起始" width="86">
             <template #default="{ row }">
               <el-input-number v-model="row.ip_start" :min="0" :max="255" size="small" controls-position="right" style="width:100%" />
             </template>
@@ -259,12 +270,45 @@
           </el-table-column>
           <el-table-column label="操作" width="62">
             <template #default="{ $index }">
-              <el-button link type="danger" size="small" @click="editingTemplate.roles.splice($index, 1)">删除</el-button>
+              <el-button link type="danger" size="small" @click="removeRole($index)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
+        <el-button size="small" class="tpl-addrole" @click="addRole">添加一个角色</el-button>
 
-        <el-button size="small" class="tpl-addrole" @click="addRole">添加一行角色</el-button>
+        <el-divider content-position="left">机台类型（只填各角色台数）</el-divider>
+        <el-table :data="editingProject.machine_types" size="small" border max-height="260">
+          <el-table-column label="机台类型" width="180">
+            <template #default="{ row }"><el-input v-model="row.name" size="small" placeholder="如 KX-2000" /></template>
+          </el-table-column>
+          <el-table-column
+            v-for="r in editingProject.roles"
+            :key="r.hostname_prefix"
+            :label="r.hostname_prefix"
+            width="96"
+          >
+            <template #default="{ row }">
+              <el-input-number
+                :model-value="row.counts[r.hostname_prefix] ?? 0"
+                @update:model-value="v => row.counts[r.hostname_prefix] = v ?? 0"
+                :min="0"
+                :max="255"
+                :controls="false"
+                size="small"
+                style="width:100%"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="说明">
+            <template #default="{ row }"><el-input v-model="row.description" size="small" placeholder="可选" /></template>
+          </el-table-column>
+          <el-table-column label="操作" width="62">
+            <template #default="{ $index }">
+              <el-button link type="danger" size="small" @click="editingProject.machine_types.splice($index, 1)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-button size="small" class="tpl-addrole" @click="addMachineType">添加一个机台类型</el-button>
       </template>
 
       <template #footer>
@@ -527,47 +571,53 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const nodes = ref([])
 const filterType = ref('')
 const filterStatus = ref('')
+const filterMachine = ref('')
 const selectedNode = ref(null)
 
 const powerDialogVisible = ref(false)
 const networkDialogVisible = ref(false)
 const networkCheckResult = ref(null)
 
-// ── 机台型号模板 ──────────────────────────────────────────────
-// 模板存后端 node_templates.json, 不入库。这里只做: 选型号 → 预览 → 应用, 以及模板维护。
+// ── 节点模板: 项目 → 机台类型 ──────────────────────────────
+// 模板存后端 node_templates.json, 不入库。项目定义共用的角色配置,
+// 机台类型只定义各角色台数 —— 同项目下不同机台的区别就在服务器台数。
 const applyDialogVisible = ref(false)
 const manageDialogVisible = ref(false)
-const templates = ref([])
-const selectedModel = ref('')
+const projects = ref([])
+const selectedProject = ref('')
+const selectedMachine = ref('')
 const preview = ref({ total: 0, nodes: [], conflicts: [] })
 const previewLoading = ref(false)
 const applying = ref(false)
 
-const currentTemplate = computed(() =>
-  templates.value.find(t => t.model === selectedModel.value) || null
+const currentProject = computed(() =>
+  projects.value.find(p => p.name === selectedProject.value) || null
 )
+const currentMachine = computed(() =>
+  currentProject.value?.machine_types.find(m => m.name === selectedMachine.value) || null
+)
+
+const emptyPreview = () => ({ total: 0, nodes: [], conflicts: [] })
 
 const loadTemplates = async () => {
   try {
     const { data } = await axios.get('/api/templates')
-    templates.value = data.templates || []
+    projects.value = data.projects || []
   } catch (e) {
     ElMessage.error('加载模板失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 
-const emptyPreview = () => ({ total: 0, nodes: [], conflicts: [] })
-
 const loadPreview = async () => {
-  if (!selectedModel.value) {
+  if (!selectedProject.value || !selectedMachine.value) {
     preview.value = emptyPreview()
     return
   }
   previewLoading.value = true
   try {
-    const { data } = await axios.get(
-      `/api/templates/${encodeURIComponent(selectedModel.value)}/preview`
-    )
+    const { data } = await axios.get('/api/templates/preview', {
+      params: { project: selectedProject.value, machine_type: selectedMachine.value },
+    })
     preview.value = data
   } catch (e) {
     preview.value = emptyPreview()
@@ -577,22 +627,32 @@ const loadPreview = async () => {
   }
 }
 
+// 换项目后原机台类型多半已不存在; 只有一个时直接选中, 省一次点击
+const onProjectChange = async () => {
+  const list = currentProject.value?.machine_types || []
+  selectedMachine.value = list.length === 1 ? list[0].name : ''
+  await loadPreview()
+}
+
 const openApply = async () => {
   preview.value = emptyPreview()
-  selectedModel.value = ''
+  selectedProject.value = ''
+  selectedMachine.value = ''
   applyDialogVisible.value = true
   await loadTemplates()
-  // 只有一个型号时直接选中, 省一次点击
-  if (templates.value.length === 1) {
-    selectedModel.value = templates.value[0].model
-    await loadPreview()
+  if (projects.value.length === 1) {
+    selectedProject.value = projects.value[0].name
+    await onProjectChange()
   }
 }
 
 const applyTemplate = async () => {
   applying.value = true
   try {
-    const { data } = await axios.post('/api/templates/apply', { model: selectedModel.value })
+    const { data } = await axios.post('/api/templates/apply', {
+      project: selectedProject.value,
+      machine_type: selectedMachine.value,
+    })
     ElMessage.success(`已创建 ${data.created} 台节点`)
     applyDialogVisible.value = false
     loadNodes()
@@ -604,19 +664,19 @@ const applyTemplate = async () => {
 }
 
 // ── 模板维护 ──────────────────────────────────────────────────
-// draftTemplates 是深拷贝的草稿, 保存成功前不影响 templates
-const draftTemplates = ref([])
-const editingModelIndex = ref(null)
+// draftProjects 是深拷贝的草稿, 保存成功前不影响 projects
+const draftProjects = ref([])
+const editingProjectIndex = ref(null)
 const savingTemplates = ref(false)
 
-const editingTemplate = computed(() =>
-  editingModelIndex.value === null ? null : draftTemplates.value[editingModelIndex.value] || null
+const editingProject = computed(() =>
+  editingProjectIndex.value === null ? null : draftProjects.value[editingProjectIndex.value] || null
 )
 
 const emptyRole = () => ({
   node_type: 'slave',
-  count: 1,
   hostname_prefix: 'node',
+  _prev: 'node',
   role: '',
   data_protocol: '',
   bmc_prefix: '',
@@ -632,36 +692,100 @@ const emptyRole = () => ({
 
 const openManage = async () => {
   await loadTemplates()
-  draftTemplates.value = JSON.parse(JSON.stringify(templates.value))
-  editingModelIndex.value = draftTemplates.value.length ? 0 : null
+  draftProjects.value = JSON.parse(JSON.stringify(projects.value))
+  draftProjects.value.forEach(p => p.roles.forEach(r => { r._prev = r.hostname_prefix }))
+  editingProjectIndex.value = draftProjects.value.length ? 0 : null
   manageDialogVisible.value = true
 }
 
-const addModel = () => {
-  draftTemplates.value.push({ model: '', description: '', roles: [emptyRole()] })
-  editingModelIndex.value = draftTemplates.value.length - 1
+const addProject = () => {
+  draftProjects.value.push({ name: '', description: '', roles: [emptyRole()], machine_types: [] })
+  editingProjectIndex.value = draftProjects.value.length - 1
 }
 
-const removeModel = () => {
-  if (editingModelIndex.value === null) return
-  draftTemplates.value.splice(editingModelIndex.value, 1)
-  editingModelIndex.value = draftTemplates.value.length ? 0 : null
+const removeProject = () => {
+  if (editingProjectIndex.value === null) return
+  draftProjects.value.splice(editingProjectIndex.value, 1)
+  editingProjectIndex.value = draftProjects.value.length ? 0 : null
 }
 
 const addRole = () => {
-  editingTemplate.value?.roles.push(emptyRole())
+  editingProject.value?.roles.push(emptyRole())
+  syncRoleKeys()
+}
+
+const removeRole = (index) => {
+  const p = editingProject.value
+  if (!p) return
+  const [gone] = p.roles.splice(index, 1)
+  // 角色没了, 各机台类型里它的台数也一并清掉, 免得留下孤儿键
+  if (gone) {
+    p.machine_types.forEach(m => {
+      delete m.counts[gone.hostname_prefix]
+      if (gone._prev) delete m.counts[gone._prev]
+    })
+  }
+}
+
+// 角色以 hostname_prefix 为标识。前缀改名后必须把各机台类型的台数从旧键迁到新键,
+// 否则台数会归零 —— 所以每个草稿角色记一个 _prev 存改名前的前缀。
+// _prev 只在前端草稿里存在, 保存时剥掉。
+const syncRoleKeys = () => {
+  const p = editingProject.value
+  if (!p) return
+
+  // 1. 按 _prev → 当前前缀 迁移已有台数
+  p.roles.forEach(r => {
+    const prev = r._prev
+    const now = r.hostname_prefix
+    if (prev && prev !== now) {
+      p.machine_types.forEach(m => {
+        if (Object.prototype.hasOwnProperty.call(m.counts, prev)) {
+          m.counts[now] = m.counts[prev]
+          delete m.counts[prev]
+        }
+      })
+    }
+    r._prev = now
+  })
+
+  // 2. 补齐新角色的键、清掉已删角色留下的孤儿键
+  const keys = p.roles.map(r => r.hostname_prefix)
+  p.machine_types.forEach(m => {
+    const next = {}
+    keys.forEach(k => { next[k] = m.counts[k] ?? 0 })
+    m.counts = next
+  })
+}
+
+const addMachineType = () => {
+  const p = editingProject.value
+  if (!p) return
+  const counts = {}
+  p.roles.forEach(r => { counts[r.hostname_prefix] = 0 })
+  p.machine_types.push({ name: '', description: '', counts })
 }
 
 const saveTemplates = async () => {
   savingTemplates.value = true
   try {
-    const { data } = await axios.put('/api/templates', { templates: draftTemplates.value })
-    templates.value = data.templates || []
+    syncRoleKeys()
+    // _prev 只是前端用来追踪改名的, 不发给后端
+    const payload = draftProjects.value.map(p => ({
+      ...p,
+      roles: p.roles.map(({ _prev, ...rest }) => rest),
+    }))
+    const { data } = await axios.put('/api/templates', { projects: payload })
+    projects.value = data.projects || []
     ElMessage.success('模板已保存')
     manageDialogVisible.value = false
-    // 改完模板后当前预览可能已失效, 重新拉一次
-    if (selectedModel.value && !templates.value.some(t => t.model === selectedModel.value)) {
-      selectedModel.value = ''
+    // 改完模板后当前选择可能已失效, 重新核对
+    if (!currentProject.value) {
+      selectedProject.value = ''
+      selectedMachine.value = ''
+      preview.value = emptyPreview()
+    } else if (!currentMachine.value) {
+      selectedMachine.value = ''
       preview.value = emptyPreview()
     } else {
       loadPreview()
@@ -767,9 +891,15 @@ const deleteNode = async (node) => {
 const filteredNodes = computed(() => {
   let result = nodes.value
   if (filterType.value) result = result.filter(n => n.node_type === filterType.value)
+  if (filterMachine.value) result = result.filter(n => n.machine_type === filterMachine.value)
   if (filterStatus.value) result = result.filter(n => n.status === filterStatus.value)
   return result
 })
+
+// 机台筛选项取自现有节点, 而不是模板 —— 模板改了也不影响已建节点的归属
+const machineOptions = computed(() =>
+  [...new Set(nodes.value.map(n => n.machine_type).filter(Boolean))].sort()
+)
 
 // ── 样式辅助 ──────────────────────────────────────────────────
 const nodeTypeTag = (type) => {
@@ -1009,7 +1139,12 @@ onMounted(() => {
   font-weight: 600;
 }
 
-/* ── 机台型号模板 ── */
+.mt-name {
+  font-size: 12px;
+  color: #d0d0d0;
+}
+
+/* ── 节点模板 ── */
 .tpl-bar {
   display: flex;
   align-items: center;
