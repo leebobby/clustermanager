@@ -28,14 +28,15 @@ Cluster Manager - Windows 桌面 App
   打开, 功能完全一样。所以通常你什么都不用做 —— 浏览器会自己弹出来。
 
   想要原生窗口, 三种办法(都不需要联网):
-    1. 发布包里有 webview2\ 目录 -> 免安装, 程序自动使用, 什么都不用做。
-       (打包时用 build_app.py --webview2 <固定版运行时目录> 带进来的)
-    2. 发布包里有 webview2\MicrosoftEdgeWebView2Setup.exe -> 用管理员身份
-       运行一次即可, 离线安装包不需要联网。
-    3. 自行从有网的机器下载 "Evergreen 独立安装包"(Evergreen Standalone
-       Installer), 拷到本机用管理员安装:
+    1. 从有网的机器下载 "Evergreen 独立安装包"(Evergreen Standalone Installer),
+       U 盘拷到本机, 用管理员身份装一次 —— 装完这台机器就永久具备了,
+       以后收到的安装包不用变大。推荐这条。
        https://developer.microsoft.com/microsoft-edge/webview2/
        注意别下 "Bootstrapper"(引导安装程序), 那个装的时候要联网。
+    2. 发布包里有 webview2\MicrosoftEdgeWebView2Setup.exe -> 就是上面那个安装包,
+       打包方已经放进来了, 用管理员运行一次即可。
+    3. 发布包里有 webview2\ 目录(里面是 msedgewebview2.exe) -> 免安装、免管理员,
+       程序自动使用, 什么都不用做。代价是发布包会大 170MB 左右。
 
 [目录结构]
   cluster-manager.exe        主程序 (FastAPI + pywebview 桌面壳)

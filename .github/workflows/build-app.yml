@@ -61,6 +61,12 @@ jobs:
         working-directory: backend
         run: python test_desktop_probe.py
 
+      # 目录选择器: 冻结包里走 PowerShell(打包排除了 tkinter)。模态框没法在 CI 里点,
+      # 但除"弹框"以外的整条链路(Add-Type / -STA / 临时文件 / 中文编码)可以非交互验证
+      - name: 目录选择器测试
+        working-directory: backend
+        run: python test_pick_folder.py
+
       # 真 Windows 上跑一次真注册表探测 —— 这段在 Linux 上测不到。
       # 只为把结果打进日志, 不因判定结果失败(runner 镜像装没装 WebView2 不该决定构建成败)
       - name: WebView2 现场探测 (Windows)

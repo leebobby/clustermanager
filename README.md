@@ -149,7 +149,18 @@ MSHTML(IE11) 内核**，Vue 3 渲染成一片空白 —— 就是「窗口打开
 找不到 Chromium 内核才退到系统默认浏览器，并弹窗说明原因。
 目标机上双击 `check-webview2.bat` 可以看本机判定结果。
 
-要在离线 Win10 上拿到**真正的原生窗口**，打包时带上固定版运行时：
+**发布包不需要因此变大。** 三条路按代价从低到高：
+
+| 做法 | 包大小 | 目标机要做什么 | 外观 |
+|------|--------|----------------|------|
+| 什么都不带（默认） | 29MB | 什么都不用做 | Edge/Chrome 应用窗口，无标签栏 |
+| 运行时装在机器上一次 | 29MB | 用 U 盘拷离线安装包，管理员装一次 | 原生窗口 |
+| 运行时打进包 | ~200MB | 什么都不用做 | 原生窗口 |
+
+第二条通常最划算：**运行时是装在机器上的，不是每个包都要带**。在那台 Win10 上装过一次之后，
+以后每次发的 29MB 包都会直接用原生窗口。
+
+要把运行时打进包（每次发布都带着，适合机器不可控、不允许安装任何东西的场合）：
 
 ```bash
 # 1. 在有网的机器上下载 WebView2「固定版运行时」(Fixed Version)，解压
@@ -160,8 +171,7 @@ python build_app.py --mode desktop --webview2 D:\webview2-fixed\
 ```
 
 `--webview2` 也接受未解压的 `.cab`（Windows 用系统 `expand` 解）和离线安装包
-`.exe`（放进包里由现场管理员装一次）。固定版运行时约 180MB，发布包会明显变大；
-不带它也能用，只是外壳变成浏览器窗口。
+`.exe`（放进包里由现场管理员装一次）。固定版运行时约 180MB，发布包会明显变大。
 
 产物：`backend/dist/cluster-manager/`（可直接运行）+
 `cluster-manager-<os>-<arch>[-server].zip|.tar.gz`，包内 `build-info.json`
@@ -336,6 +346,9 @@ Edge WebView2 运行时，而 pywebview 的 `winforms._is_chromium()` 查不到�
 | `backend/console.py` | **新建**：`force_utf8()`。Windows 上 stdout 一被重定向（管道 / `> log.txt` / CI）就退回 ANSI 代码页，英文 Windows 是 cp1252，编不了中文 —— 带中文的 `print` 直接 `UnicodeEncodeError` 崩掉。`main.py` / `desktop.py` / `test_desktop_probe.py` 都在最开始调一次。`server` 模式的 `cluster-manager.exe > log.txt` 也踩这个坑（种子数据那几句中文），一并修掉 |
 | `.github/workflows/build-app.yml` | 加两步：决策表测试（两平台）；真 Windows 上跑一次 `desktop.py --check` 打出现场探测结果 |
 | `.gitignore` | 忽略 `build_resources/`（固定版运行时约 180MB） |
+| `backend/api/diagnose.py` | **修浏览器模式下「浏览」按钮的死路**：前端拿不到 `window.pywebview` 时会降级调 `/api/diagnose/pick-folder`，而该端点在冻结包里直接 400（打包排除了 tkinter，且 `sys.executable` 是 exe 不是解释器）。改为冻结 + Windows 时用 PowerShell 的 `FolderBrowserDialog`（`-STA` + `ExecutionPolicy Bypass`，脚本与结果都走临时文件，避免把用户路径拼进命令行，结果用 UTF-8 回传以支持中文路径）；失败时给的提示是「请直接填写绝对路径」这种能照做的话，不是内部错误 |
+| `backend/api/diagnose.py` | 同时加**本机来源校验**：对话框只能弹在跑服务的那台机器上，server 模式下浏览器在远端，弹出来用户看不见还会把请求挂住十分钟等一个没人点的框。非 `127.0.0.1/::1` 来源直接返回「远程访问用不了，请手填」 |
+| `backend/test_pick_folder.py` | **新建**：远程来源拒绝、冻结+非 Windows、脚本转义（中文/单引号/空格）、失败提示可操作性；另在真 Windows 上用 `CLUSTER_MANAGER_PICKER_SELFTEST=1` 非交互跑通整条 PowerShell 链路（模态框本身没法在 CI 里点） |
 
 **为什么优先用 `--app` 模式而不是直接开浏览器标签页**：Edge *浏览器* 和 WebView2
 *运行时* 是两个独立的东西，Win10 上很可能有前者没有后者。`msedge.exe --app=URL`

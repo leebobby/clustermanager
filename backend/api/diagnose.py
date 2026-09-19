@@ -5,11 +5,13 @@
 import asyncio
 import json
 import os
+import shutil
 import threading
 import uuid
 import shlex
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
@@ -1189,22 +1191,76 @@ class PickFolderRequest(BaseModel):
     initial: str = ""
 
 
-@router.post("/pick-folder")
-def pick_folder(req: PickFolderRequest):
+def _pick_folder_powershell(initial: str) -> str:
     """
-    开发模式用的目录选择对话框 (subprocess 起 tkinter, 避开 FastAPI 线程池里 tk 必须主线程的坑)。
-    生产 (pywebview) 模式前端会先尝试 window.pywebview.api.pick_folder(), 走不通才落到这里。
-    PyInstaller 冻结模式下 sys.executable 不是 Python 解释器, 不能 -c 启动, 直接 400。
-    """
-    import sys
-    import subprocess
-    if getattr(sys, "frozen", False):
-        raise HTTPException(
-            status_code=400,
-            detail="冻结模式请用 window.pywebview.api.pick_folder() 直接走桌面原生对话框",
-        )
+    用 PowerShell 的 FolderBrowserDialog 选目录。
 
-    initial = (req.initial or "").replace("\\", "/").strip()
+    给冻结包用: 打包时排除了 tkinter, 而 sys.executable 是 exe 不是解释器,
+    没法 -c 起子进程。PowerShell 是 Win10/11 自带的, 不引入任何依赖。
+
+    几个要点:
+      - 必须 -STA: Windows Forms 的模态对话框要求单线程单元
+      - -ExecutionPolicy Bypass: 否则默认策略下 .ps1 可能被拒绝执行
+      - 结果写临时文件而不是 stdout: 路径含中文时省掉一层控制台编码的麻烦
+      - 脚本和结果都走临时文件, 避免把用户给的初始路径拼进命令行(引号/空格陷阱)
+    """
+    import subprocess
+    import tempfile
+
+    selftest = os.environ.get("CLUSTER_MANAGER_PICKER_SELFTEST") == "1"
+
+    work = Path(tempfile.mkdtemp(prefix="cm-pick-"))
+    script_path = work / "pick.ps1"
+    result_path = work / "result.txt"
+    try:
+        # 单引号字符串里的单引号在 PowerShell 中用两个单引号转义
+        ps_initial = initial.replace("'", "''")
+        ps_result = str(result_path).replace("'", "''")
+        if selftest:
+            # 自检: 不弹框, 直接把初始路径写回。用来在 CI 的真 Windows 上验证
+            # Add-Type / -STA / 临时文件 / 中文编码这一整条链路
+            body = "$selected = $initial\n"
+        else:
+            body = (
+                "Add-Type -AssemblyName System.Windows.Forms\n"
+                "$dlg = New-Object System.Windows.Forms.FolderBrowserDialog\n"
+                "$dlg.Description = '选择日志导出目录'\n"
+                "$dlg.ShowNewFolderButton = $true\n"
+                "if ($initial -ne '') { $dlg.SelectedPath = $initial }\n"
+                "$selected = ''\n"
+                "if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
+                "{ $selected = $dlg.SelectedPath }\n"
+            )
+        script = (
+            f"$initial = '{ps_initial}'\n"
+            f"{body}"
+            f"[System.IO.File]::WriteAllText('{ps_result}', $selected, "
+            "(New-Object System.Text.UTF8Encoding $false))\n"
+        )
+        script_path.write_text(script, encoding="utf-8-sig")
+
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass",
+             "-File", str(script_path)],
+            capture_output=True, text=True, timeout=600,
+            encoding="utf-8", errors="replace",
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"PowerShell 退出码 {proc.returncode}: {(proc.stderr or '').strip()[:300]}"
+            )
+        if not result_path.exists():
+            return ""
+        return result_path.read_text(encoding="utf-8").strip()
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _pick_folder_tkinter(initial: str) -> str:
+    """开发模式用: subprocess 起 tkinter(避开 FastAPI 线程池里 tk 必须主线程的坑)"""
+    import subprocess
+    import sys
+
     code = (
         "import sys, tkinter as tk\n"
         "from tkinter import filedialog\n"
@@ -1213,23 +1269,78 @@ def pick_folder(req: PickFolderRequest):
         "r.destroy()\n"
         "sys.stdout.write(p or '')\n"
     )
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True, text=True, timeout=600,
-            encoding="utf-8", errors="replace",
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, timeout=600,
+        encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"子进程退出码 {proc.returncode}: {(proc.stderr or '').strip()[:300]}"
         )
+    return (proc.stdout or "").strip()
+
+
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"}
+
+HINT_TYPE_PATH = "请直接在输入框中填写目录的绝对路径"
+
+
+@router.post("/pick-folder")
+def pick_folder(req: PickFolderRequest, request: Request):
+    """
+    目录选择对话框。
+
+    前端优先走 window.pywebview.api.pick_folder(); 只有在没有 pywebview 桥的时候
+    才落到这里 —— 即浏览器模式(Win10 缺 WebView2 时的兜底)和 server 模式。
+    这两种情况以前都是直接 400, 导致"浏览"按钮弹一句用户看不懂的报错。
+
+      冻结 + Windows : PowerShell 的 FolderBrowserDialog(不需要 tkinter)
+      非冻结         : tkinter 子进程
+      冻结 + 非 Windows: 没有可用的原生对话框, 让用户手填
+
+    先看请求是不是来自本机: 对话框只能弹在跑服务的这台机器上。server 模式下
+    浏览器在别的机器, 弹出来用户根本看不见, 还会把这个请求挂住十分钟等一个
+    没人点的框 —— 所以远程访问时直接让用户手填。
+    """
+    import subprocess
+    import sys
+
+    client_host = (request.client.host if request.client else "") or ""
+    if client_host not in _LOCAL_HOSTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"目录对话框只能弹在运行服务的那台机器上, 远程访问时用不了。{HINT_TYPE_PATH}",
+        )
+
+    frozen = getattr(sys, "frozen", False)
+    initial = (req.initial or "").strip()
+
+    if frozen and os.name != "nt":
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前平台没有可用的原生目录对话框。{HINT_TYPE_PATH}",
+        )
+
+    try:
+        if frozen:
+            # Windows 惯用反斜杠, FolderBrowserDialog 也只认反斜杠
+            path = _pick_folder_powershell(initial.replace("/", "\\"))
+        else:
+            path = _pick_folder_tkinter(initial.replace("\\", "/"))
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="目录选择超时 (10 分钟未确认)")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"打开目录对话框失败: {e}")
-
-    if proc.returncode != 0:
+    except FileNotFoundError:
         raise HTTPException(
             status_code=500,
-            detail=f"目录对话框子进程失败 (exit={proc.returncode}): {proc.stderr.strip()}",
+            detail=f"系统里找不到目录选择程序。{HINT_TYPE_PATH}",
         )
-    path = (proc.stdout or "").strip()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"打开目录对话框失败({e})。{HINT_TYPE_PATH}",
+        )
+
     # 规范化分隔符 (Windows 习惯反斜杠)
     if path and os.name == "nt":
         path = path.replace("/", "\\")
