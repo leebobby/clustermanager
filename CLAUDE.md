@@ -49,6 +49,14 @@ next to the executable, smoke-tests the result in server mode, and archives it.
 `build.bat` / `build.sh` are thin wrappers around it — do not reimplement build steps
 in them.
 
+Windows rendering: the desktop build needs Edge WebView2. Win11 has it built in, Win10
+usually does not, and pywebview silently falls back to MSHTML (IE11), which renders the
+Vue 3 app blank white. `backend/desktop.py::probe_webview2()` decides between a bundled
+fixed-version runtime, the system runtime, and a browser fallback (Edge/Chrome
+`--app=URL`). Bundle a runtime with `--webview2 PATH` for offline machines. The decision
+table is covered by `backend/test_desktop_probe.py` (plain python, no pytest) — run it
+after touching that logic, since it cannot be exercised on a dev machine.
+
 ## Backend architecture
 
 ```

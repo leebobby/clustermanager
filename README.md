@@ -136,7 +136,32 @@ python build_app.py --mode server    # uvicorn 控制台进程（浏览器访问
 | `--skip-deps` | 跳过 pip 安装 |
 | `--no-archive` / `--no-smoke` | 不打压缩包 / 跳过自检 |
 | `--include-pxe-data` | 把本机真实 `pxe_data/` 打进包（**含 BMC 明文口令，慎用**） |
+| `--webview2 PATH` | 把 WebView2 运行时打进包（离线 Win10 需要，见下） |
 | `--output DIR` | 压缩包输出目录 |
+
+### 离线 Win10 白屏怎么办
+
+Win11 内置 Edge WebView2 运行时，Win10 通常没有。缺失时 pywebview 会**静默退回
+MSHTML(IE11) 内核**，Vue 3 渲染成一片空白 —— 就是「窗口打开了但全白」，而且不报错。
+
+程序侧已经不会再给白窗了：启动时先探测运行时，缺失就自动改用浏览器承载界面。
+优先用 Edge/Chrome 的 `--app=` 模式（无标签栏无地址栏，观感接近原生窗口），
+找不到 Chromium 内核才退到系统默认浏览器，并弹窗说明原因。
+目标机上双击 `check-webview2.bat` 可以看本机判定结果。
+
+要在离线 Win10 上拿到**真正的原生窗口**，打包时带上固定版运行时：
+
+```bash
+# 1. 在有网的机器上下载 WebView2「固定版运行时」(Fixed Version)，解压
+#    https://developer.microsoft.com/microsoft-edge/webview2/
+# 2. 打包时带进去（免安装、免管理员、免联网）
+python build_app.py --mode desktop --webview2 D:\webview2-fixed\
+#    也可以把它放到 build_resources/webview2/，脚本会自动采用
+```
+
+`--webview2` 也接受未解压的 `.cab`（Windows 用系统 `expand` 解）和离线安装包
+`.exe`（放进包里由现场管理员装一次）。固定版运行时约 180MB，发布包会明显变大；
+不带它也能用，只是外壳变成浏览器窗口。
 
 产物：`backend/dist/cluster-manager/`（可直接运行）+
 `cluster-manager-<os>-<arch>[-server].zip|.tar.gz`，包内 `build-info.json`
@@ -288,6 +313,36 @@ cluster-manager-linux-arm64.tar.gz
 ---
 
 ## 变更记录
+
+### 2026-09-19 — 修复 Win10 上「窗口打开但一片白」
+
+**背景**：同一个包在 Win11 上正常，Win10 上窗口打开后全白。根因是 Win10 没有
+Edge WebView2 运行时，而 pywebview 的 `winforms._is_chromium()` 查不到运行时注册表项时
+会**静默退回 MSHTML(IE11) 内核**（只在 logger 里 warning 一句），Vue 3 在 IE11 下
+直接渲染不出来。目标机离线，装不了运行时。
+
+| 文件 | 变更 |
+|------|------|
+| `backend/desktop.py` | 新增 `probe_webview2()`：按 `bundled`(随包固定版) → `system`(系统已装) → `none` 三级判定。读 EdgeUpdate 下四个发行通道的 `pv` 版本号（≥86.0.622.0）和 .NET Framework Release（≥394802 即 4.6.2），与 pywebview 的判断口径一致 |
+| `backend/desktop.py` | 判定为 `none` 时**不再创建 pywebview 窗口**，改用浏览器承载：优先找 Chromium 内核（先查 `App Paths` 注册表，再退标准安装路径）用 `--app=URL` 开无标签栏窗口，否则 `webbrowser.open`；再用一个系统模态框说明原因**并兼任进程存活锚点**（后端在守护线程里，主线程卡在模态框上，点确定才退出，避免变成看不见也关不掉的后台进程） |
+| `backend/desktop.py` | 随包运行时走 pywebview 的 `settings['WEBVIEW2_RUNTIME_PATH']` → `CoreWebView2CreationProperties.BrowserExecutableFolder`。**必须传绝对路径**：pywebview 解析相对路径用 `get_app_root()`，PyInstaller 下等于 `sys._MEIPASS`（即 `_internal/`），不是 exe 目录 |
+| `backend/desktop.py` | `webview.start()` 外面包一层 try/except：探测通过但窗口仍创建失败（缺 .NET 组件、被杀软拦、显卡驱动）时同样退浏览器 |
+| `backend/desktop.py` | 新增 `--check` 诊断模式：打印操作系统 / 架构 / 随包运行时 / 系统运行时版本 / .NET Release / Chromium 路径 / 判定结论。冻结包是 `console=False`，所以同时弹窗显示（`CLUSTER_MANAGER_NO_DIALOG=1` 可关） |
+| `build_app.py` | 新增 `--webview2 PATH`：接受固定版运行时目录（自动穿过 `Microsoft.WebView2.FixedVersionRuntime.<ver>.x64` 那层）、未解压 `.cab`（Windows 用 `expand`，Linux 用 `cabextract`）、离线安装包 `.exe`。也会自动采用 `build_resources/webview2/` |
+| `build_templates/check-webview2.bat` | **新建**：目标机上双击即可看判定结果 |
+| `build_templates/README.txt` | 新增「窗口打开了但一片空白」一节，给出三条不需要联网的路 |
+| `backend/test_desktop_probe.py` | **新建**：用假 `winreg` 覆盖 7 种注册表判定 + 4 种随包运行时情况 + 5 组版本比较 + 3 种 Chromium 查找 + 7 种兜底路径。不依赖 pytest（本仓库没有测试框架），CI 两个平台都跑 |
+| `.github/workflows/build-app.yml` | 加两步：决策表测试（两平台）；真 Windows 上跑一次 `desktop.py --check` 打出现场探测结果 |
+| `.gitignore` | 忽略 `build_resources/`（固定版运行时约 180MB） |
+
+**为什么优先用 `--app` 模式而不是直接开浏览器标签页**：Edge *浏览器* 和 WebView2
+*运行时* 是两个独立的东西，Win10 上很可能有前者没有后者。`msedge.exe --app=URL`
+出来的窗口没有标签栏和地址栏，和原生窗口观感基本一致，比丢进一个标签页体面得多。
+
+**为什么不自动下载运行时**：构建沙箱到 `go.microsoft.com` 被代理拦（403），我无法
+验证下载链接是否有效，所以没往脚本里硬编码没验证过的 URL。`--webview2` 收本地路径。
+
+---
 
 ### 2026-09-19 — 构建流程统一为一个跨平台脚本 + CI 自动出包
 

@@ -35,6 +35,9 @@ backend/ssh_credentials.json
 # 机台型号模板 (运行时可在页面上编辑, 首次启动自动生成默认模板)
 backend/node_templates.json
 
+# ── WebView2 固定版运行时 (约 180MB, 构建时打进包, 不入库) ──
+build_resources/
+
 # ── 发布产物 (build_app.py 产出, 命名带 os/arch 后缀) ───────
 cluster-manager-*.zip
 cluster-manager-*.tar.gz

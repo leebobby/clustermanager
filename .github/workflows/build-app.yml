@@ -56,6 +56,18 @@ jobs:
       - name: 构建
         run: python build_app.py --mode ${{ matrix.mode }}
 
+      # WebView2 判定 / 浏览器兜底的决策表(假注册表, 两个平台都跑)
+      - name: WebView2 判定测试
+        working-directory: backend
+        run: python test_desktop_probe.py
+
+      # 真 Windows 上跑一次真注册表探测 —— 这段在 Linux 上测不到。
+      # 只为把结果打进日志, 不因判定结果失败(runner 镜像装没装 WebView2 不该决定构建成败)
+      - name: WebView2 现场探测 (Windows)
+        if: matrix.mode == 'desktop'
+        working-directory: backend
+        run: python desktop.py --check
+
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:

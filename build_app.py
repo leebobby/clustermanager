@@ -55,6 +55,8 @@ BUILD_DIR = BACKEND_DIR / "build"
 DIST_ROOT = BACKEND_DIR / "dist"
 DIST_DIR = DIST_ROOT / "cluster-manager"
 TEMPLATES_DIR = ROOT / "build_templates"
+# 放 WebView2 固定版运行时的地方(体积大, 不入库): 存在就自动打进包
+BUILD_RESOURCES_WEBVIEW2 = ROOT / "build_resources" / "webview2"
 
 IS_WINDOWS = os.name == "nt"
 STEP_TOTAL = 6
@@ -294,6 +296,81 @@ echo "================================================"
 """
 
 
+# ── WebView2 运行时(离线 Win10 的关键)────────────────────────────────────────
+
+def _find_runtime_root(path: Path) -> Path | None:
+    """在 path 下找 msedgewebview2.exe 所在目录(固定版运行时解压出来会多一层版本号目录)"""
+    if (path / "msedgewebview2.exe").is_file():
+        return path
+    for depth in ("*", "*/*"):
+        for exe in path.glob(f"{depth}/msedgewebview2.exe"):
+            return exe.parent
+    return None
+
+
+def _extract_cab(cab: Path, dest: Path) -> Path | None:
+    """解 WebView2 固定版的 .cab。Windows 用系统自带 expand, Linux 用 cabextract"""
+    dest.mkdir(parents=True, exist_ok=True)
+    if IS_WINDOWS:
+        cmd = ["expand", str(cab), "-F:*", str(dest)]
+    elif which("cabextract"):
+        cmd = ["cabextract", "-q", "-d", str(dest), str(cab)]
+    else:
+        die(f"需要解压 {cab.name}, 但没找到 cabextract。\n"
+            "       请先手动解压, 再用 --webview2 指向解压出来的目录。")
+    run(cmd, ROOT, f"解压 {cab.name}")
+    return _find_runtime_root(dest)
+
+
+def stage_webview2(args) -> None:
+    """
+    把 WebView2 运行时放进包里。
+
+    离线 Win10 上没有 WebView2 运行时, pywebview 会静默退回 IE11 内核, Vue 3
+    渲染成一片空白。带上固定版运行时就彻底绕开这件事: 免安装、免管理员、免联网,
+    desktop.py 启动时认 exe 同级的 webview2\\ 目录。
+    """
+    source = Path(args.webview2).expanduser() if args.webview2 else None
+    if source is None and BUILD_RESOURCES_WEBVIEW2.exists():
+        source = BUILD_RESOURCES_WEBVIEW2
+        info(f"自动采用 {BUILD_RESOURCES_WEBVIEW2.relative_to(ROOT)}/ 里的 WebView2 运行时")
+    if source is None:
+        return
+    if not source.exists():
+        die(f"--webview2 指向的路径不存在: {source}")
+
+    if args.mode != "desktop":
+        warn(f"server 模式不需要 WebView2, 已忽略 {source}")
+        return
+
+    target = DIST_DIR / "webview2"
+
+    # 1) 离线安装包(.exe): 放进包里让现场自己装, 仍然需要管理员权限
+    if source.is_file() and source.suffix.lower() == ".exe":
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target / source.name)
+        info(f"webview2/{source.name} (离线安装包, 现场需管理员运行一次)")
+        warn("这是安装包而不是固定版运行时: 程序不会自动用它, 需要在目标机手动安装。"
+             "想免安装请改用固定版运行时(解压出 msedgewebview2.exe 的那个目录)")
+        return
+
+    # 2) 固定版运行时: 目录, 或者还没解压的 .cab
+    runtime_root: Path | None
+    if source.is_file() and source.suffix.lower() == ".cab":
+        runtime_root = _extract_cab(source, BUILD_DIR / "webview2-cab")
+    else:
+        runtime_root = _find_runtime_root(source)
+
+    if runtime_root is None:
+        die(f"在 {source} 里找不到 msedgewebview2.exe。\n"
+            "       --webview2 需要的是 WebView2『固定版运行时』(Fixed Version) 解压后的目录,\n"
+            "       或未解压的 .cab, 或离线安装包 .exe。")
+
+    copy_tree(runtime_root, target)
+    size_mb = sum(f.stat().st_size for f in target.rglob("*") if f.is_file()) / 1048576
+    info(f"webview2/ 固定版运行时 ({size_mb:.0f} MB, 免安装免管理员) <- {runtime_root.name}")
+
+
 def stage_resources(args) -> None:
     """
     把运行时资源放进 dist/。
@@ -328,8 +405,10 @@ def stage_resources(args) -> None:
         (DIST_DIR / sub).mkdir(exist_ok=True)
     info("iso/ firmware/ (空目录占位)")
 
+    stage_webview2(args)
+
     if IS_WINDOWS:
-        for name in ("start.bat", "start-shared.bat", "README.txt"):
+        for name in ("start.bat", "start-shared.bat", "README.txt", "check-webview2.bat"):
             src = TEMPLATES_DIR / name
             if src.is_file():
                 shutil.copy2(src, DIST_DIR / name)
@@ -490,6 +569,11 @@ def parse_args(argv: list) -> argparse.Namespace:
     p.add_argument("--skip-deps", action="store_true", help="跳过 pip 安装")
     p.add_argument("--no-archive", action="store_true", help="不打压缩包")
     p.add_argument("--no-smoke", action="store_true", help="跳过产物自检")
+    p.add_argument("--webview2", metavar="PATH",
+                   help="把 WebView2 运行时打进包(仅 desktop 模式)。可以是固定版运行时"
+                        "解压后的目录、未解压的 .cab, 或离线安装包 .exe。"
+                        "放固定版运行时时目标机免安装、免管理员、免联网 —— 离线 Win10 需要这个。"
+                        f"也可以直接把文件放到 {BUILD_RESOURCES_WEBVIEW2.relative_to(ROOT)}/ 由脚本自动采用")
     p.add_argument("--include-pxe-data", action="store_true",
                    help="把本机真实 pxe_data/ 打进包(含 BMC 明文口令, 默认不带)")
     p.add_argument("--output", metavar="DIR", help="压缩包输出目录, 默认仓库根目录")

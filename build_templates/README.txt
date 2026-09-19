@@ -16,9 +16,26 @@ Cluster Manager - Windows 桌面 App
 
 [环境要求]
   - Windows 10 / 11 x64
-  - Microsoft Edge WebView2 Runtime (Win11 默认已装; Win10 若缺失,
-    程序首次启动会提示安装, 也可从微软官网下载:
-    https://developer.microsoft.com/microsoft-edge/webview2/)
+  - 渲染内核: Edge WebView2。Win11 内置; Win10 通常没有 —— 见下一节。
+
+[窗口打开了但一片空白 / 白屏 (多见于 Win10)]
+  原因: 本机没有 Edge WebView2 运行时。缺失时底层库会退回 IE11 内核,
+  而本程序前端是 Vue 3, IE11 渲染不了, 于是窗口全白。
+
+  先确认: 双击 check-webview2.bat, 会弹窗告诉你本机判定结果。
+
+  本程序在检测到 WebView2 缺失时不会再开白窗, 而是自动改用系统默认浏览器
+  打开, 功能完全一样。所以通常你什么都不用做 —— 浏览器会自己弹出来。
+
+  想要原生窗口, 三种办法(都不需要联网):
+    1. 发布包里有 webview2\ 目录 -> 免安装, 程序自动使用, 什么都不用做。
+       (打包时用 build_app.py --webview2 <固定版运行时目录> 带进来的)
+    2. 发布包里有 webview2\MicrosoftEdgeWebView2Setup.exe -> 用管理员身份
+       运行一次即可, 离线安装包不需要联网。
+    3. 自行从有网的机器下载 "Evergreen 独立安装包"(Evergreen Standalone
+       Installer), 拷到本机用管理员安装:
+       https://developer.microsoft.com/microsoft-edge/webview2/
+       注意别下 "Bootstrapper"(引导安装程序), 那个装的时候要联网。
 
 [目录结构]
   cluster-manager.exe        主程序 (FastAPI + pywebview 桌面壳)
@@ -32,6 +49,8 @@ Cluster Manager - Windows 桌面 App
   cluster_manager.log        运行日志 (无控制台窗口下排错的唯一入口)
   start.bat                  本机访问启动器 (推荐)
   start-shared.bat           局域网共享启动器 (绑定 0.0.0.0)
+  check-webview2.bat         渲染内核诊断 (窗口白屏时双击它)
+  webview2\                  WebView2 固定版运行时 (可选; 有则免安装直接用)
 
 [网络要求]
   本 Windows 主机必须同时可达:
