@@ -1,0 +1,90 @@
+# 自动构建 App —— 推送到 main / 打 tag / 手动触发时, 在两个平台上跑 build_app.py
+#
+#   windows-desktop : cluster-manager.exe (pywebview 原生窗口)
+#   linux-server    : cluster-manager     (uvicorn 控制台, 含产物自检)
+#
+# 产物在 Actions 运行页面的 Artifacts 区下载。打 v* tag 时同时创建 Release。
+name: build-app
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一分支上新的推送取消还在跑的旧构建, 省 runner 时间
+concurrency:
+  group: build-app-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-desktop
+            mode: desktop
+          - os: ubuntu-latest
+            label: linux-server
+            mode: server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # 构建脚本自己会装 requirements.txt + pyinstaller, 这里不重复
+      - name: 构建
+        run: python build_app.py --mode ${{ matrix.mode }}
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-manager-${{ matrix.label }}
+          path: |
+            cluster-manager-*.zip
+            cluster-manager-*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: 发布 Release
+    # 只有打 v* tag 才发版
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: 创建 Release 并上传两个平台的包
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            artifacts/*
