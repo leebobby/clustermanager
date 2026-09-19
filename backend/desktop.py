@@ -98,6 +98,22 @@ def _parse_version(text: str) -> tuple:
     return tuple(parts)
 
 
+def _runtime_subkeys(guid: str) -> tuple:
+    """
+    一个通道要查的注册表子键。
+
+    两个视图都查, 不去判断位数: 32 位进程看到的是 WOW6432Node 下的镜像, 而运行时
+    可能注册在任一侧。用 platform.machine() 来判断是错的 —— 它给的是机器架构
+    (AMD64), 而注册表重定向取决于进程位数; 更要紧的是 Windows 上
+    platform.machine() 内部自己要读一次注册表, 白白把这个函数绑死在
+    winreg 之外的东西上(CI 上就是在这儿炸的)。两个都试, 简单且更全。
+    """
+    return (
+        rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{guid}",
+        rf"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{guid}",
+    )
+
+
 def _system_runtime_version() -> str:
     """读注册表看系统装没装 WebView2 运行时, 返回版本号字符串(没装返回空串)"""
     if os.name != "nt":
@@ -105,19 +121,15 @@ def _system_runtime_version() -> str:
     import winreg
 
     for guid, _channel in _WEBVIEW2_CLIENTS:
-        for hive_name in ("HKEY_CURRENT_USER", "HKEY_LOCAL_MACHINE"):
-            # 32 位系统 / HKCU 下没有 WOW6432Node 这一层
-            if platform.machine() == "x86" or hive_name == "HKEY_CURRENT_USER":
-                sub = rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{guid}"
-            else:
-                sub = rf"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{guid}"
-            try:
-                with winreg.OpenKey(getattr(winreg, hive_name), sub) as key:
-                    version, _ = winreg.QueryValueEx(key, "pv")
-            except OSError:
-                continue
-            if version and _parse_version(version) >= _WEBVIEW2_MIN:
-                return str(version)
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for sub in _runtime_subkeys(guid):
+                try:
+                    with winreg.OpenKey(hive, sub) as key:
+                        version, _ = winreg.QueryValueEx(key, "pv")
+                except OSError:
+                    continue
+                if version and _parse_version(version) >= _WEBVIEW2_MIN:
+                    return str(version)
     return ""
 
 
@@ -355,13 +367,22 @@ def _run_server(port: int):
     uvicorn.run(app, host=BIND_HOST, port=port, log_level="info")
 
 
+def _sysinfo() -> tuple:
+    """取操作系统/架构描述。诊断工具不该因为取不到系统信息就崩掉"""
+    try:
+        return platform.platform(), platform.machine()
+    except Exception as exc:
+        return f"(读取失败: {exc.__class__.__name__})", "(未知)"
+
+
 def _check_report() -> str:
     status = probe_webview2()
+    os_desc, arch = _sysinfo()
     lines = [
         "Cluster Manager — WebView2 运行时探测",
         "",
-        f"操作系统    : {platform.platform()}",
-        f"架构        : {platform.machine()}",
+        f"操作系统    : {os_desc}",
+        f"架构        : {arch}",
         f"程序目录    : {APP_DIR}",
         f"随包运行时  : {_bundled_runtime() or '(无)'}",
         f"系统运行时  : {_system_runtime_version() or '(未安装)'}",

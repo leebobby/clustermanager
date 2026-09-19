@@ -42,6 +42,8 @@ _ORIGINAL_WINREG = sys.modules.get("winreg")
 
 RUNTIME_GUID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 RUNTIME_KEY = rf"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{RUNTIME_GUID}"
+# 32 位视图(没有 WOW6432Node 这一层)。两侧都要能认出来
+RUNTIME_KEY_32 = rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{RUNTIME_GUID}"
 DOTNET_KEY = r"SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full"
 APP_PATHS_EDGE = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"
 
@@ -123,6 +125,8 @@ def test_registry_decisions() -> None:
          {DOTNET_KEY: {"Release": 378389}, RUNTIME_KEY: {"pv": "130.0.2849.68"}}, "none"),
         ("读不到 .NET 键 + 有运行时", {RUNTIME_KEY: {"pv": "130.0.2849.68"}}, "system"),
         ("pv 是空串", {**net48, RUNTIME_KEY: {"pv": ""}}, "none"),
+        ("运行时注册在 32 位视图(无 WOW6432Node 层)",
+         {**net48, RUNTIME_KEY_32: {"pv": "130.0.2849.68"}}, "system"),
     ]
     for label, keys, expect in cases:
         got = probe_with(keys)

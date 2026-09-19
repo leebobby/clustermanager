@@ -324,6 +324,7 @@ Edge WebView2 运行时，而 pywebview 的 `winforms._is_chromium()` 查不到�
 | 文件 | 变更 |
 |------|------|
 | `backend/desktop.py` | 新增 `probe_webview2()`：按 `bundled`(随包固定版) → `system`(系统已装) → `none` 三级判定。读 EdgeUpdate 下四个发行通道的 `pv` 版本号（≥86.0.622.0）和 .NET Framework Release（≥394802 即 4.6.2），与 pywebview 的判断口径一致 |
+| `backend/desktop.py` | 注册表两个视图（有/无 `WOW6432Node`）都查，不去判断位数。pywebview 用 `platform.machine()` 来选视图，这是错的：它返回的是**机器**架构（AMD64），而注册表重定向取决于**进程**位数；而且 Windows 上 `platform.machine()` 内部自己要读一次注册表，把探测函数绑死在 `winreg` 之外的东西上（CI 在这儿炸过一次）。两个都试，简单且覆盖更全 |
 | `backend/desktop.py` | 判定为 `none` 时**不再创建 pywebview 窗口**，改用浏览器承载：优先找 Chromium 内核（先查 `App Paths` 注册表，再退标准安装路径）用 `--app=URL` 开无标签栏窗口，否则 `webbrowser.open`；再用一个系统模态框说明原因**并兼任进程存活锚点**（后端在守护线程里，主线程卡在模态框上，点确定才退出，避免变成看不见也关不掉的后台进程） |
 | `backend/desktop.py` | 随包运行时走 pywebview 的 `settings['WEBVIEW2_RUNTIME_PATH']` → `CoreWebView2CreationProperties.BrowserExecutableFolder`。**必须传绝对路径**：pywebview 解析相对路径用 `get_app_root()`，PyInstaller 下等于 `sys._MEIPASS`（即 `_internal/`），不是 exe 目录 |
 | `backend/desktop.py` | `webview.start()` 外面包一层 try/except：探测通过但窗口仍创建失败（缺 .NET 组件、被杀软拦、显卡驱动）时同样退浏览器 |
