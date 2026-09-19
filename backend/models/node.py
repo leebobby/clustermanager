@@ -12,28 +12,6 @@ from sqlalchemy.orm import sessionmaker
 Base = declarative_base()
 
 
-class Cluster(Base):
-    """
-    集群表 —— 现场一台机台 = 一套集群。
-
-    这是「产品 → 机台类型 → 集群 → 节点」里的第三层。没有它的时候, 同一种机台
-    在现场有几台, 它们的节点就全挤在一个池子里: 连续套两次模板会排成 slave-01…24,
-    分不出哪套是哪台机台, 诊断也没法只看眼前这一套。
-
-    product / machine_type 按名字引用模板文件里的产品与机台类型(模板不入库)。
-    """
-    __tablename__ = 'clusters'
-
-    id = Column(Integer, primary_key=True)
-    name = Column(String(100), unique=True)      # 机台编号, 如 M-2024-017
-    product = Column(String(100))
-    machine_type = Column(String(100))
-    site = Column(String(100))                   # 厂区 / 产线
-    note = Column(Text, default='')
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_diagnosed_at = Column(DateTime)
-
-
 class Node(Base):
     """节点表 - 包含三平面网络信息"""
     __tablename__ = 'nodes'
@@ -42,9 +20,6 @@ class Node(Base):
     hostname = Column(String(100), unique=True)
     node_type = Column(String(20))  # host/master/slave/subswath/gstorage/sensor
     role = Column(String(50))
-
-    # 所属集群 —— 组网图、诊断、告警都只看当前集群
-    cluster_id = Column(Integer)
 
     # 来源模板。role_key 对应模板里 roles[].key, 是节点与角色定义之间的锚点:
     # 组网图靠它归组, 诊断靠它知道这台机器该接哪些平面、该跑哪些专项检查。
@@ -69,6 +44,15 @@ class Node(Base):
     data_mac = Column(String(17))
     data_status = Column(String(20), default='offline')
     data_protocol = Column(String(20))  # DPDK/RDMA
+
+    # 每个平面的全部 IP: {"management":["172.16.0.11"],"data_front":["200.1.1.11","200.1.2.11"],...}
+    # 一个角色在同一平面上可以有多块网卡 —— Master 数据面就是四个 IP(前段两个 +
+    # 后段两个)。上面那几个扁平字段只留第一个, 诊断按这里逐个探。
+    plane_ips = Column(JSON)
+
+    # 每个平面最近一次实测: {"management":"online","data_back":"offline",...}
+    # 组网图靠它把"通"和"断"画成两个颜色 —— 整机 status 一个字段说不清四个平面。
+    plane_status = Column(JSON)
 
     # 整体状态
     status = Column(String(20), default='offline')

@@ -21,7 +21,7 @@ from config import STATIC_DIR, ISO_DIR, FIRMWARE_DIR
 from models.node import init_db, engine
 from models.seed import seed_demo_data
 from api import (nodes, pxe, ipmi, network, alerts, diagnose, patrol, firmware,
-                 templates, clusters)
+                 templates, workspace)
 
 
 def _run_migrations():
@@ -63,6 +63,13 @@ def _run_migrations():
         "ALTER TABLE nodes ADD COLUMN product VARCHAR(100)",
         # 脚本认领模板里的哪一项角色专项检查, 一键诊断据此把"该查什么"和"怎么查"对上
         "ALTER TABLE diag_scripts ADD COLUMN check_key VARCHAR(40) DEFAULT ''",
+        # v4: 一个角色在同一平面上可以有多块网卡(Master 数据面四个 IP), 每平面
+        #     的实测结果也要分开记 —— 整机一个 status 说不清四个平面的通断
+        "ALTER TABLE nodes ADD COLUMN plane_ips JSON",
+        "ALTER TABLE nodes ADD COLUMN plane_status JSON",
+        # v4: 撤掉"集群"这一层。工具一次只对着一台机台, 当前机台类型记在
+        #     workspace.json 里。nodes.cluster_id 与 clusters 表不再使用 ——
+        #     SQLite 删列麻烦, 老库里留着不动, 新代码一律不读不写。
     ]
     # 加完列再搬数据。只填空值, 所以重复执行安全, 也不会盖掉用户后来改过的内容。
     backfills = [
@@ -124,7 +131,7 @@ app.include_router(diagnose.router,prefix="/api/diagnose",tags=["故障诊断"])
 app.include_router(patrol.router,  prefix="/api/patrol",  tags=["巡检管理"])
 app.include_router(firmware.router,prefix="/api/firmware",tags=["固件仓库"])
 app.include_router(templates.router,prefix="/api/templates",tags=["机台模板"])
-app.include_router(clusters.router, prefix="/api/clusters", tags=["集群与一键诊断"])
+app.include_router(workspace.router, prefix="/api/workspace", tags=["当前机台与一键诊断"])
 
 
 @app.get("/api/health")

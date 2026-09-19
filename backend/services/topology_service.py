@@ -68,6 +68,8 @@ def _planned_nodes(role: Dict, count: int) -> List[Dict]:
             "ctrl_ip": spec["ctrl_ip"],
             "data_ip": spec["data_ip"],
             "data_protocol": spec["data_protocol"],
+            "plane_ips": spec["plane_ips"],
+            "plane_status": {},
             "status": "planned",
             "id": None,
         })
@@ -93,7 +95,9 @@ def _live_nodes(rows: List, role: Dict) -> List[Dict]:
         "ctrl_ip": n.ctrl_ip,
         "data_ip": n.data_ip,
         "data_protocol": n.data_protocol,
-        "status": n.status or "offline",
+        "plane_ips": n.plane_ips or {},
+        "plane_status": n.plane_status or {},
+        "status": n.status or "unknown",
     } for n in sorted(picked, key=lambda x: (x.hostname or ""))]
 
 
@@ -127,9 +131,22 @@ def build(product: Dict, machine: Dict, nodes: Optional[List] = None) -> Dict:
                 f"({'多' if diff > 0 else '少'} {abs(diff)} 台)"
             )
 
+        plane_rollup = {}
+        for p in role["planes"]:
+            states = [(n.get("plane_status") or {}).get(p["plane"]) for n in members]
+            if any(x == "offline" for x in states):
+                plane_rollup[p["plane"]] = "down"
+            elif states and all(x == "online" for x in states):
+                plane_rollup[p["plane"]] = "up"
+            elif any(x == "online" for x in states):
+                plane_rollup[p["plane"]] = "partial"
+            else:
+                plane_rollup[p["plane"]] = "unknown"
+
         groups.append({
             "key": role["key"],
             "label": role["label"],
+            "plane_state": plane_rollup,
             "node_type": role["node_type"],
             "note": role["note"],
             "planned_count": planned_count,
@@ -140,14 +157,31 @@ def build(product: Dict, machine: Dict, nodes: Optional[List] = None) -> Dict:
         })
 
         for p in role["planes"]:
+            up = down = unknown = 0
+            for n in members:
+                state = (n.get("plane_status") or {}).get(p["plane"])
+                if state == "online":
+                    up += 1
+                elif state == "offline":
+                    down += 1
+                else:
+                    unknown += 1
+            # 一条线代表这个角色所有机器在这个平面上的链路。全通画通的颜色, 有断的
+            # 就画断的 —— 现场要的是"这条平面有没有问题", 而不是平均值
+            state = "down" if down else ("up" if up and not unknown else
+                                         ("partial" if up else "unknown"))
             links.append({
                 "source": role["key"],
                 "target": ts.PLANES[p["plane"]]["switch"],
                 "plane": p["plane"],
                 "protocol": p["protocol"] or None,
                 "bandwidth": p["bandwidth"],
-                "prefix": p["prefix"],
+                "prefixes": p["prefixes"],
+                # 一个角色在一个平面上可能有多块网卡, 线上标的是机器数不是网卡数
+                "nics": len(p["prefixes"]),
                 "count": len(members),
+                "up": up, "down": down, "unknown": unknown,
+                "state": state,
             })
 
     switches = _switches(roles)
@@ -156,7 +190,8 @@ def build(product: Dict, machine: Dict, nodes: Optional[List] = None) -> Dict:
     if any(s["id"] == "sw-mgmt" for s in switches):
         links.append({
             "source": STATION["id"], "target": "sw-mgmt", "plane": "management",
-            "protocol": None, "bandwidth": "GE", "prefix": "", "count": 1,
+            "protocol": None, "bandwidth": "GE", "prefixes": [], "nics": 1,
+            "count": 1, "up": 0, "down": 0, "unknown": 1, "state": "unknown",
         })
 
     return {

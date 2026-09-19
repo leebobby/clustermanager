@@ -97,27 +97,42 @@ def build_plan(topology: Dict, scripts_by_check: Optional[Dict[str, Dict]] = Non
             host = node.get("hostname") or "?"
 
             # ── 平面可达性: 角色声明接几个平面就查几项 ──
+            # 一个平面可能有多块网卡(Master 数据面前后段各两块), 每个 IP 单独一项 ——
+            # 四个 IP 断哪一个都得看得见, 合成一项就把问题盖住了
             if "ping" in checks or not checks:
+                plane_ips = node.get("plane_ips") or {}
                 for plane in planes:
-                    ip = node.get(_PLANE_IP_FIELD.get(plane, ""))
-                    items.append({
-                        "id": f"{host}|{plane}|ping",
-                        "category": "平面连通",
-                        "title": f"{ts.PLANES[plane]['label']} 可达",
-                        "role_key": role_key,
-                        "role_label": role_label,
-                        "node_id": node.get("id"),
-                        "target": host,
-                        "plane": plane,
-                        "check": "ping",
-                        "kind": "builtin",
-                        "host": ip,
-                        "status": SKIP if not ip else PENDING,
-                        "detail": "" if ip else "模板里这个平面没配网段, 没有地址可探",
-                        "suggestion": "",
-                        "latency_ms": None,
-                        "script_id": None,
-                    })
+                    ips = plane_ips.get(plane) or []
+                    if not ips:
+                        fallback = node.get(_PLANE_IP_FIELD.get(plane, ""))
+                        ips = [fallback] if fallback else []
+                    label = ts.PLANES[plane]["label"]
+                    if not ips:
+                        items.append({
+                            "id": f"{host}|{plane}|ping",
+                            "category": "平面连通",
+                            "title": f"{label} 可达",
+                            "role_key": role_key, "role_label": role_label,
+                            "node_id": node.get("id"), "target": host, "plane": plane,
+                            "check": "ping", "kind": "builtin", "host": None,
+                            "status": SKIP,
+                            "detail": "模板里这个平面没配网段, 没有地址可探",
+                            "suggestion": "", "latency_ms": None, "script_id": None,
+                        })
+                        continue
+                    for idx, ip in enumerate(ips):
+                        suffix = f" 第 {idx + 1} 口" if len(ips) > 1 else ""
+                        items.append({
+                            "id": f"{host}|{plane}|ping|{idx}",
+                            "category": "平面连通",
+                            "title": f"{label} 可达{suffix}",
+                            "role_key": role_key, "role_label": role_label,
+                            "node_id": node.get("id"), "target": host, "plane": plane,
+                            "nic_index": idx,
+                            "check": "ping", "kind": "builtin", "host": ip,
+                            "status": PENDING, "detail": "", "suggestion": "",
+                            "latency_ms": None, "script_id": None,
+                        })
 
             # ── 带外与登录 ──
             for check, ip, ports in (("bmc", node.get("mgmt_ip"), BMC_PORTS),
@@ -171,6 +186,76 @@ def build_plan(topology: Dict, scripts_by_check: Optional[Dict[str, Dict]] = Non
                 })
 
     return items
+
+
+def select(items: List[Dict], checks: Optional[List[str]] = None,
+           roles: Optional[List[str]] = None) -> List[Dict]:
+    """
+    按勾选过滤检查项。两个都不给就是全都要。
+
+    一键诊断跑全量在现场不现实(几十台机器 × 几百项), 所以要能只勾"我这次想查的
+    那几项"。过滤掉的项直接不出现在报告里 —— 不是标成"未检查", 因为那是"没法查",
+    这里是"这次不想查", 两回事。
+    """
+    out = items
+    if checks:
+        wanted = set(checks)
+        out = [i for i in out if i["check"] in wanted]
+    if roles:
+        wanted_roles = set(roles)
+        out = [i for i in out if i.get("role_key") in wanted_roles]
+    return out
+
+
+def options(items: List[Dict]) -> Dict:
+    """告诉界面这次可以勾哪些 —— 每项各有多少个检查点"""
+    by_check, by_role = {}, {}
+    for item in items:
+        c = by_check.setdefault(item["check"], {
+            "key": item["check"], "label": _label(item["check"]),
+            "kind": item["kind"], "count": 0,
+            "script_id": item.get("script_id"), "script_name": item.get("script_name"),
+            "ready": item["kind"] == "builtin" or bool(item.get("script_id")),
+        })
+        c["count"] += 1
+        r = by_role.setdefault(item["role_key"], {
+            "key": item["role_key"], "label": item["role_label"], "count": 0,
+        })
+        r["count"] += 1
+
+    # (检查项 × 角色) 的精确计数。界面拿它算"这次会跑多少项" —— 按比例估会
+    # 差好几项, 给现场看一个错的数比不给更糟。
+    matrix: Dict[str, Dict[str, int]] = {}
+    for item in items:
+        matrix.setdefault(item["check"], {})
+        matrix[item["check"]][item["role_key"]] = \
+            matrix[item["check"]].get(item["role_key"], 0) + 1
+
+    order = list(ts.CHECKS.keys())
+    checks = sorted(by_check.values(),
+                    key=lambda c: order.index(c["key"]) if c["key"] in order else 99)
+    return {"checks": checks, "roles": list(by_role.values()), "matrix": matrix}
+
+
+def plane_status(items: List[Dict]) -> Dict[str, Dict[str, str]]:
+    """
+    从跑完的检查项里汇出每台机器每个平面的通断, 供写回 Node.plane_status。
+
+    一个平面有多块网卡时, 任一口不通就记 offline —— 组网图上这条线该是红的。
+    """
+    out: Dict[str, Dict[str, str]] = {}
+    for item in items:
+        if item["check"] != "ping" or not item.get("plane"):
+            continue
+        per_node = out.setdefault(item["target"], {})
+        plane = item["plane"]
+        if item["status"] == FAIL:
+            per_node[plane] = "offline"
+        elif item["status"] in (PASS, WARN):
+            per_node.setdefault(plane, "online")
+        else:
+            per_node.setdefault(plane, "unknown")
+    return out
 
 
 def run_builtin(items: List[Dict], timeout_ms: int = 1000) -> List[Dict]:

@@ -3,10 +3,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 /*
  * 四项导航, 以一键诊断为落地页。
  *
- * 原来的「仪表盘」并进了一键诊断 —— 现场要的是"这台机台有没有问题", 而不是
- * 一屏看板; 原来的「节点管理」并进「集群管理」, 节点本来就是集群的一部分;
- * 「故障诊断」里那套脚本维护挪到「告警与日志」, 它是给配脚本的人用的, 不是
- * 现场每天点的东西。
+ * 没有"集群"页 —— 本工具一次只对着一台机台, 打开时选机台类型, 节点按模板加载。
+ * 模板的修改入口在「机台与模板」里。
  *
  * PXE 部署与巡检管理仍然保留组件和后端路由, 前端不挂 —— 想恢复把注释放开即可。
  */
@@ -24,10 +22,10 @@ const routes = [
     meta: { title: '组网图' }
   },
   {
-    path: '/clusters',
-    name: 'Clusters',
-    component: () => import('@/views/Clusters.vue'),
-    meta: { title: '集群管理' }
+    path: '/machines',
+    name: 'Machines',
+    component: () => import('@/views/Machines.vue'),
+    meta: { title: '机台与模板' }
   },
   {
     path: '/logs',
@@ -45,7 +43,7 @@ const routes = [
   // { path: '/pxe',    name: 'PXEDeploy', component: () => import('@/views/PXEDeploy.vue'), meta: { title: 'PXE部署' } },
   // { path: '/patrol', name: 'Patrol',    component: () => import('@/views/Patrol.vue'),    meta: { title: '巡检管理' } },
 
-  // 未匹配到的路径(含 /nodes、/diagnose 这些旧书签)统一兜回一键诊断, 避免白屏
+  // 未匹配到的路径(含 /clusters、/nodes 这些旧书签)统一兜回一键诊断, 避免白屏
   {
     path: '/:pathMatch(.*)*',
     redirect: '/'

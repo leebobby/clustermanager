@@ -1,11 +1,58 @@
 <template>
   <div class="checkup">
-    <el-empty v-if="!current" description="还没有集群">
-      <router-link to="/clusters"><el-button type="primary">去新建一套集群</el-button></router-link>
-    </el-empty>
+    <el-empty v-if="!ready" description="还没选机台类型" />
 
     <template v-else>
-      <!-- 大结论: 一眼看到该不该动手 -->
+      <!-- 选这次要查什么。全量跑在现场不现实, 所以先勾再跑 -->
+      <section class="picker cm-card">
+        <header class="pk-head">
+          <span class="pk-title">这次查什么</span>
+          <span class="pk-sub">勾上的才跑。没勾的不会出现在报告里</span>
+          <div class="spacer"></div>
+          <el-button link type="primary" size="small" @click="presetQuick">只查连通性</el-button>
+          <el-button link type="primary" size="small" @click="presetAll">全选可跑的</el-button>
+        </header>
+
+        <div class="pk-body">
+          <div class="pk-row">
+            <span class="pk-label">检查项</span>
+            <div class="pk-chips">
+              <button
+                v-for="c in options.checks"
+                :key="c.key"
+                type="button"
+                class="chip"
+                :class="{ 'is-on': picked.checks.includes(c.key), 'is-dead': !c.ready }"
+                :title="c.ready ? '' : '没有脚本认领这项, 勾了也跑不出结果'"
+                @click="toggle('checks', c.key)"
+              >
+                <span class="chip-name">{{ c.label }}</span>
+                <span class="chip-count">{{ c.count }}</span>
+                <span v-if="!c.ready" class="chip-dead">缺脚本</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="pk-row">
+            <span class="pk-label">角色范围</span>
+            <div class="pk-chips">
+              <button
+                v-for="r in options.roles"
+                :key="r.key"
+                type="button"
+                class="chip"
+                :class="{ 'is-on': picked.roles.includes(r.key) }"
+                @click="toggle('roles', r.key)"
+              >
+                <span class="chip-name">{{ r.label }}</span>
+                <span class="chip-count">{{ r.count }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 大结论 -->
       <section class="verdict cm-card" :class="`verdict--${summary.verdict}`">
         <div class="v-badge" :class="`v-badge--${summary.verdict}`">
           <el-icon :size="30"><component :is="VERDICT_ICON[summary.verdict]" /></el-icon>
@@ -19,68 +66,60 @@
           </div>
           <div class="v-meta">
             <template v-if="result">
-              共 {{ summary.total }} 个检查项 · 覆盖 {{ nodeCount }} 台服务器
+              跑了 {{ summary.total }} 项 · {{ ws.machineType }} · {{ ws.nodeCount }} 台
               <template v-if="result.elapsed_seconds != null"> · 耗时 {{ result.elapsed_seconds }} 秒</template>
               <span v-if="summary.note" class="v-unchecked">{{ summary.note }}</span>
             </template>
             <template v-else>
-              还没跑过。检查项由组网图推导 —— 每个角色该接哪几个平面, 就查哪几项。
+              按当前勾选会跑 <b>{{ plannedCount }}</b> 项。检查项由组网图推导 ——
+              每个角色该接哪几个平面就查哪几项, Master 数据面四个口是四项。
             </template>
           </div>
         </div>
 
         <div class="v-action">
-          <el-button type="primary" size="large" :loading="running" @click="run">
+          <el-button
+            type="primary" size="large"
+            :loading="running" :disabled="!plannedCount"
+            @click="run"
+          >
             <el-icon v-if="!running" class="btn-icon"><TrendCharts /></el-icon>
             {{ result ? '重新诊断' : '开始诊断' }}
           </el-button>
-          <span class="v-time">{{ lastRunText }}</span>
+          <span class="v-time">{{ plannedCount ? `本次 ${plannedCount} 项` : '还没勾任何检查项' }}</span>
         </div>
       </section>
 
-      <el-alert
-        v-if="error"
-        :title="error"
-        type="error"
-        show-icon
-        :closable="false"
-        class="block"
-      />
+      <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="block" />
 
-      <!-- 模板台数和实际对不上, 这本身就是要查的事 -->
       <el-alert
         v-if="mismatches.length"
-        type="warning"
-        show-icon
-        :closable="false"
-        class="block"
+        type="warning" show-icon :closable="false" class="block"
         title="实际台数与模板不一致"
       >
         <div v-for="m in mismatches" :key="m" class="mismatch">{{ m }}</div>
       </el-alert>
 
-      <!-- 四平面概览 -->
-      <section v-if="result" class="planes">
+      <!-- 平面概览 -->
+      <section v-if="result && planeStats.length" class="planes">
         <div v-for="p in planeStats" :key="p.key" class="plane cm-card">
           <div class="p-head">
             <svg width="20" height="8" viewBox="0 0 20 8" aria-hidden="true">
               <line x1="1" y1="4" x2="19" y2="4"
-                :stroke="planeColor(p.key)"
-                :stroke-width="PLANE_WIDTH[p.key]"
-                :stroke-dasharray="p.key === 'data_back' ? '6,4' : null"
-                stroke-linecap="round" />
+                :stroke="planeColor(p.key)" :stroke-width="PLANE_WIDTH[p.key]"
+                :stroke-dasharray="p.key === 'data_back' ? '6,4' : null" stroke-linecap="round" />
             </svg>
             <span class="p-name" :style="{ color: planeColor(p.key) }">{{ p.label }}</span>
           </div>
           <div class="p-count">
             <span class="p-num" :class="{ 'p-num--bad': p.fail }">{{ p.pass }}</span>
-            <span class="p-den">/ {{ p.total }} 通</span>
+            <span class="p-den">/ {{ p.total }} 个口通</span>
           </div>
           <span class="cm-chip" :class="`cm-chip--${p.status}`">{{ p.text }}</span>
         </div>
       </section>
 
-      <!-- 检查结果: 故障在最上面 -->
+      <!-- 结果 -->
       <section v-if="result" class="results cm-card">
         <header class="r-head">
           <span class="r-title">检查结果</span>
@@ -107,16 +146,12 @@
             </div>
             <el-button
               v-if="item.status === 'fail'"
-              size="small"
-              plain
-              type="primary"
-              class="r-locate"
+              size="small" plain type="primary" class="r-locate"
               @click="locate(item)"
             >在组网图定位</el-button>
           </article>
         </div>
 
-        <!-- 没查的项单独一组, 不混在通过里 —— 把没查的算成通过比没有报告更糟 -->
         <button v-if="unchecked.length" type="button" class="fold" @click="showUnchecked = !showUnchecked">
           <span class="cm-dot cm-dot--idle"></span>
           <span class="fold-name">{{ unchecked.length }} 项未检查</span>
@@ -163,24 +198,25 @@
 </template>
 
 <script setup>
-import { computed, markRaw, ref, watch } from 'vue'
+import { computed, markRaw, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   TrendCharts, CircleCheck, Warning, CircleClose, QuestionFilled, ArrowDown
 } from '@element-plus/icons-vue'
 import axios from 'axios'
-import { currentCluster, loadClusters } from '@/stores/cluster'
+import { ws, ready } from '@/stores/workspace'
 import { planeColors, PLANE_LABEL, PLANE_WIDTH } from '@/styles/tokens'
 
 const router = useRouter()
-const current = currentCluster
 
 const running = ref(false)
 const error = ref('')
 const result = ref(null)
 const showPassed = ref(false)
 const showUnchecked = ref(false)
+const options = reactive({ checks: [], roles: [], total: 0, matrix: {} })
+const picked = reactive({ checks: [], roles: [] })
 
 const VERDICT_ICON = {
   fail: markRaw(CircleClose),
@@ -189,8 +225,6 @@ const VERDICT_ICON = {
   skip: markRaw(QuestionFilled),
 }
 
-// 解析一次就缓存住。每行都去 getComputedStyle 的话, 149 个检查项每次重渲染
-// 就是 149 次样式计算。颜色仍然只在 theme.css 里定义一处。
 const PLANE_COLOR = planeColors()
 const planeColor = (key) => PLANE_COLOR[key] || 'var(--cm-text-2)'
 
@@ -200,21 +234,29 @@ const summary = computed(() => result.value?.summary || {
 const counts = computed(() => summary.value.counts || {})
 const items = computed(() => result.value?.items || [])
 const mismatches = computed(() => result.value?.mismatches || [])
-const nodeCount = computed(() => current.value?.node_count ?? 0)
 
-// fail / warn 是要动手的; skip / pending 是没查的; pass 折叠起来
 const actionable = computed(() => items.value.filter(i => i.status === 'fail' || i.status === 'warn'))
 const unchecked = computed(() => items.value.filter(i => i.status === 'skip' || i.status === 'pending'))
 const passed = computed(() => items.value.filter(i => i.status === 'pass'))
 
 const dotOf = (status) => ({ fail: 'fail', warn: 'warn', pass: 'pass' }[status] || 'idle')
 
+// 这次会跑多少项 —— 从后端给的 (检查项 x 角色) 精确计数里取, 不做比例估算
+const plannedCount = computed(() => {
+  let n = 0
+  picked.checks.forEach(c => {
+    const row = options.matrix[c] || {}
+    picked.roles.forEach(r => { n += row[r] || 0 })
+  })
+  return n
+})
+
 const uncheckedReason = computed(() => {
   const noScript = unchecked.value.filter(i => i.kind === 'script' && !i.script_id).length
   const noAddr = unchecked.value.filter(i => i.kind === 'builtin').length
   const parts = []
   if (noScript) parts.push(`${noScript} 项没有脚本认领`)
-  if (noAddr) parts.push(`${noAddr} 项模板里没配地址`)
+  if (noAddr) parts.push(`${noAddr} 项探测不成`)
   return parts.join(' · ')
 })
 
@@ -227,7 +269,9 @@ const passedBreakdown = computed(() => {
 const planeStats = computed(() => {
   const acc = {}
   items.value.filter(i => i.check === 'ping' && i.plane).forEach(i => {
-    const slot = acc[i.plane] || (acc[i.plane] = { key: i.plane, label: PLANE_LABEL[i.plane] || i.plane, pass: 0, warn: 0, fail: 0, total: 0 })
+    const slot = acc[i.plane] || (acc[i.plane] = {
+      key: i.plane, label: PLANE_LABEL[i.plane] || i.plane, pass: 0, warn: 0, fail: 0, total: 0,
+    })
     slot.total += 1
     if (i.status === 'pass') slot.pass += 1
     else if (i.status === 'warn') { slot.pass += 1; slot.warn += 1 }
@@ -237,26 +281,50 @@ const planeStats = computed(() => {
   return ORDER.filter(k => acc[k]).map(k => acc[k]).map(p => ({
     ...p,
     status: p.fail ? 'fail' : (p.warn ? 'warn' : (p.total ? 'pass' : 'idle')),
-    text: p.fail ? `${p.fail} 台不通` : (p.warn ? `${p.warn} 台延迟偏高` : '全部正常'),
+    text: p.fail ? `${p.fail} 个口不通` : (p.warn ? `${p.warn} 个口延迟偏高` : '全部正常'),
   }))
 })
 
-const lastRunText = computed(() => {
-  const at = result.value?.diagnosed_at || current.value?.last_diagnosed_at
-  if (!at) return '尚未诊断'
-  const d = new Date(at)
-  return Number.isNaN(d.getTime()) ? '尚未诊断' : `上次 ${d.toLocaleString('zh-CN', { hour12: false })}`
-})
+const toggle = (kind, key) => {
+  const arr = picked[kind]
+  const i = arr.indexOf(key)
+  if (i >= 0) arr.splice(i, 1)
+  else arr.push(key)
+}
+
+// 默认只勾连通性 —— 它最快、不需要登机器, 现场十有八九先看这个
+const presetQuick = () => {
+  picked.checks = options.checks.filter(c => c.ready && c.kind === 'builtin').map(c => c.key)
+  picked.roles = options.roles.map(r => r.key)
+}
+const presetAll = () => {
+  picked.checks = options.checks.filter(c => c.ready).map(c => c.key)
+  picked.roles = options.roles.map(r => r.key)
+}
+
+const loadOptions = async () => {
+  error.value = ''
+  try {
+    const { data } = await axios.get('/api/workspace/diagnose/options')
+    options.checks = data.checks || []
+    options.roles = data.roles || []
+    options.total = data.total || 0
+    options.matrix = data.matrix || {}
+    presetQuick()
+  } catch (e) {
+    error.value = e?.response?.data?.detail || e.message || '读取检查项失败'
+  }
+}
 
 const run = async () => {
-  if (!current.value) return
   running.value = true
   error.value = ''
   try {
-    const { data } = await axios.post(`/api/clusters/${current.value.id}/diagnose`)
+    const { data } = await axios.post('/api/workspace/diagnose', {
+      checks: picked.checks,
+      roles: picked.roles,
+    })
     result.value = data
-    // 侧栏那张卡要跟着更新"上次诊断"和节点数
-    loadClusters({ force: true })
   } catch (e) {
     error.value = e?.response?.data?.detail || e.message || '诊断失败'
   } finally {
@@ -264,18 +332,14 @@ const run = async () => {
   }
 }
 
-const locate = (item) => {
-  router.push({ path: '/network', query: { focus: item.target } })
-}
+const locate = (item) => router.push({ path: '/network', query: { focus: item.target } })
 
 const exportReport = () => {
   if (!result.value) return
-  const c = result.value.cluster || {}
   const lines = [
-    `集群体检报告`,
-    `集群      ${c.name || ''}`,
-    `产品      ${c.product || ''}`,
-    `机台类型  ${c.machine_type || ''}`,
+    '机台体检报告',
+    `产品      ${result.value.product || ''}`,
+    `机台类型  ${result.value.machine_type || ''}`,
     `时间      ${new Date(result.value.diagnosed_at).toLocaleString('zh-CN', { hour12: false })}`,
     `结论      ${summary.value.headline}${summary.value.note ? ' · ' + summary.value.note : ''}`,
     '',
@@ -289,17 +353,19 @@ const exportReport = () => {
   const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
-  a.download = `体检报告-${c.name || 'cluster'}-${Date.now()}.txt`
+  a.download = `体检报告-${result.value.machine_type || 'machine'}-${Date.now()}.txt`
   a.click()
   URL.revokeObjectURL(a.href)
   ElMessage.success('报告已导出')
 }
 
-// 换集群就把上一套的结果清掉, 别让人看着旧结果以为是新的
-watch(() => current.value?.id, () => {
+// 换机台类型就把上一台的结果清掉, 别让人看着旧结果以为是新的
+watch(() => `${ws.product}/${ws.machineType}`, () => {
   result.value = null
-  error.value = ''
+  if (ready.value) loadOptions()
 })
+
+onMounted(() => { if (ready.value) loadOptions() })
 </script>
 
 <style scoped>
@@ -307,15 +373,45 @@ watch(() => current.value?.id, () => {
 .spacer { flex-grow: 1; }
 .block { margin: 0; }
 
-/* ── 大结论 ── */
+/* 选检查项 */
+.picker { display: flex; flex-direction: column; }
+.pk-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--cm-border-light);
+}
+.pk-title { font-size: 14px; font-weight: 700; color: var(--cm-text); }
+.pk-sub { font-size: 12px; color: var(--cm-text-2); }
+.pk-body { padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; }
+.pk-row { display: flex; align-items: flex-start; gap: 14px; }
+.pk-label {
+  width: 60px; flex-shrink: 0;
+  font-size: 12px; font-weight: 700; color: var(--cm-text-3);
+  line-height: 28px;
+}
+.pk-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 28px; padding: 0 11px;
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-border);
+  border-radius: 999px;
+  font-family: inherit; cursor: pointer;
+}
+.chip:hover { border-color: var(--cm-brand-line); }
+.chip.is-on { background: var(--cm-brand-tint); border-color: var(--cm-brand); }
+.chip.is-dead { opacity: .62; }
+.chip-name { font-size: 12px; font-weight: 600; color: var(--cm-text); }
+.chip.is-on .chip-name { color: var(--cm-brand); }
+.chip-count { font-size: 11px; color: var(--cm-text-3); font-variant-numeric: tabular-nums; }
+.chip-dead { font-size: 10px; color: var(--cm-warn); font-weight: 600; }
+
+/* 大结论 */
 .verdict { padding: 20px 24px; display: flex; align-items: center; gap: 22px; }
 .verdict--fail { border-color: var(--cm-crit-line); }
-
 .v-badge {
-  width: 62px; height: 62px; flex-shrink: 0;
-  border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  border: 2px solid;
+  width: 62px; height: 62px; flex-shrink: 0; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; border: 2px solid;
 }
 .v-badge--fail { background: var(--cm-crit-bg); border-color: var(--cm-crit-line); color: var(--cm-crit); }
 .v-badge--warn { background: var(--cm-warn-bg); border-color: var(--cm-warn-line); color: var(--cm-warn); }
@@ -340,7 +436,6 @@ watch(() => current.value?.id, () => {
 
 .mismatch { font-size: 13px; line-height: 1.8; }
 
-/* ── 四平面 ── */
 .planes { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
 .plane { padding: 15px 17px; display: flex; flex-direction: column; gap: 9px; }
 .p-head { display: flex; align-items: center; gap: 8px; }
@@ -351,7 +446,6 @@ watch(() => current.value?.id, () => {
 .p-den { font-size: 14px; color: var(--cm-text-3); }
 .plane .cm-chip { align-self: flex-start; }
 
-/* ── 结果列表 ── */
 .results { display: flex; flex-direction: column; overflow: hidden; }
 .r-head {
   height: 46px; flex-shrink: 0;
@@ -366,8 +460,7 @@ watch(() => current.value?.id, () => {
 .rows--quiet { background: var(--cm-bg); }
 .row {
   display: flex; align-items: flex-start; gap: 14px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--cm-border-light);
+  padding: 14px 20px; border-bottom: 1px solid var(--cm-border-light);
 }
 .row .cm-dot { margin-top: 5px; }
 .r-body { flex-grow: 1; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
@@ -384,8 +477,7 @@ watch(() => current.value?.id, () => {
 
 .fold {
   display: flex; align-items: center; gap: 11px;
-  width: 100%; box-sizing: border-box;
-  padding: 14px 20px;
+  width: 100%; box-sizing: border-box; padding: 14px 20px;
   background: var(--cm-surface);
   border: none; border-top: 1px solid var(--cm-border-light);
   font-family: inherit; text-align: left; cursor: pointer;

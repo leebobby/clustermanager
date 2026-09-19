@@ -151,6 +151,100 @@ def test_bad_plane_dropped():
           "不认识的平面直接丢掉, 不画进图里")
 
 
+def test_plane_prefixes():
+    section("一个平面多块网卡")
+    role = ts._normalize_role({"key": "master", "planes": [
+        {"plane": "data_front", "prefixes": ["200.1.1.", "200.1.2."], "protocol": "DPDK"},
+        {"plane": "data_back", "prefix": "100.1.1.", "protocol": "RDMA"},   # 老写法
+    ]})
+    front = next(p for p in role["planes"] if p["plane"] == "data_front")
+    back = next(p for p in role["planes"] if p["plane"] == "data_back")
+    check(front["prefixes"] == ["200.1.1.", "200.1.2."], "多个前缀原样保留",
+          str(front["prefixes"]))
+    check(back["prefixes"] == ["100.1.1."], "老的单个 prefix 也读得进来",
+          str(back["prefixes"]))
+
+
+def test_master_four_data_ips():
+    section("Master 数据面四个 IP")
+    product = ts._normalize(ts._DEFAULT_TEMPLATES)["products"][0]
+    master = ts.find_role(product, "master")
+    spec = ts.plan_node(master, 0)
+
+    check(len(spec["plane_ips"].get("data_front", [])) == 2, "前段 DPDK 两个",
+          str(spec["plane_ips"].get("data_front")))
+    check(len(spec["plane_ips"].get("data_back", [])) == 2, "后段 RDMA 两个",
+          str(spec["plane_ips"].get("data_back")))
+    check(len(ts.all_ips(spec)) == 6, "连管理面控制面一共六个 IP",
+          str(sorted(ts.all_ips(spec))))
+    check(spec["data_ip"] == "200.1.1.11" and spec["data_protocol"] == "DPDK",
+          "扁平 data_ip 取第一个, 老代码不受影响", f"{spec['data_ip']} {spec['data_protocol']}")
+
+    # 四个 IP 必须各自成一项检查 —— 合成一项会把断掉的那口盖住
+    graph = topology_service.build(product, product["machine_types"][0])
+    items = [i for i in diag_plan.build_plan(graph, {})
+             if i["target"] == "master-01" and i["check"] == "ping"]
+    hosts = [i["host"] for i in items]
+    check(len(items) == 6, "master-01 排出六项可达性检查", str(len(items)))
+    check(len(set(hosts)) == 6, "六个检查点是六个不同的 IP", str(hosts))
+    check(any("第 2 口" in i["title"] for i in items), "多网卡时标出是第几口",
+          str([i["title"] for i in items if "口" in i["title"]]))
+
+
+def test_ip_conflict_covers_all_nics():
+    section("避让要覆盖全部网卡的 IP")
+    product = ts._normalize(ts._DEFAULT_TEMPLATES)["products"][0]
+    machine = next(m for m in product["machine_types"] if m["counts"].get("master"))
+    # 占住 master-01 第二块 DPDK 网卡的 IP。只看扁平 data_ip 的话这条会漏掉
+    planned, conflicts = ts.expand(product, machine, set(), {"200.1.2.11"})
+    master = next(n for n in planned if n["role_key"] == "master")
+    check(master["hostname"] != "master-01", "被占的序号整体跳过", master["hostname"])
+    check(any("跳过" in c for c in conflicts), "冲突有说明", str(conflicts))
+
+
+def test_selection():
+    section("按勾选缩小诊断范围")
+    product = ts._normalize(ts._DEFAULT_TEMPLATES)["products"][0]
+    graph = topology_service.build(product, product["machine_types"][0])
+    items = diag_plan.build_plan(graph, {})
+
+    only_ssh = diag_plan.select(items, checks=["ssh"])
+    check(only_ssh and all(i["check"] == "ssh" for i in only_ssh),
+          "只勾 SSH 就只剩 SSH", f"{len(only_ssh)} 项")
+
+    only_master = diag_plan.select(items, roles=["master"])
+    check(only_master and all(i["role_key"] == "master" for i in only_master),
+          "只勾 Master 就只剩 Master", f"{len(only_master)} 项")
+
+    # 标准型有 6 台 Master, 每台 6 个平面检查点 —— 6 x 6
+    both = diag_plan.select(items, checks=["ping"], roles=["master"])
+    check(len(both) == 36 and all(i["check"] == "ping" and i["role_key"] == "master"
+                                  for i in both),
+          "两个条件是且的关系", f"{len(both)} 项")
+
+    check(len(diag_plan.select(items)) == len(items), "都不勾就是全都要")
+
+    opts = diag_plan.options(items)
+    ready = {c["key"]: c["ready"] for c in opts["checks"]}
+    check(ready.get("ping") is True and ready.get("dpdk_port") is False,
+          "没脚本认领的标成不可跑, 让人知道勾了也白勾", str(ready))
+
+
+def test_plane_status_rollup():
+    section("每平面通断汇总")
+    items = [
+        {"check": "ping", "plane": "data_front", "target": "m1", "status": diag_plan.PASS},
+        {"check": "ping", "plane": "data_front", "target": "m1", "status": diag_plan.FAIL},
+        {"check": "ping", "plane": "control", "target": "m1", "status": diag_plan.PASS},
+        {"check": "ssh", "plane": None, "target": "m1", "status": diag_plan.FAIL},
+    ]
+    out = diag_plan.plane_status(items)
+    check(out["m1"]["data_front"] == "offline",
+          "四个口断一个, 这个平面就算断 —— 组网图上这条线该是红的")
+    check(out["m1"]["control"] == "online", "全通的平面算通")
+    check("ssh" not in str(out), "非平面检查不参与平面汇总")
+
+
 # ── 2. 展开 ───────────────────────────────────────────────────────────────────
 
 def _demo_product():
@@ -263,9 +357,15 @@ def test_topology_no_data_plane():
 
 
 class _FakeNode:
+    """没显式给的属性一律 None —— 对应"列存在但值是空"这种情况"""
     def __init__(self, **kw):
         for k, v in kw.items():
             setattr(self, k, v)
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return None
 
 
 def test_topology_live_mismatch():
@@ -493,6 +593,8 @@ def main():
     print("模板分层 / 组网图 / 诊断计划 测试\n")
     for fn in (test_migrate_v2, test_migrate_v1, test_migrate_idempotent,
                test_key_collision, test_bad_plane_dropped,
+               test_plane_prefixes, test_master_four_data_ips,
+               test_ip_conflict_covers_all_nics, test_selection, test_plane_status_rollup,
                test_expand, test_expand_skips_used, test_expand_two_clusters_dont_collide,
                test_topology_from_template, test_topology_no_data_plane,
                test_topology_live_mismatch, test_topology_legacy_node_still_shows,

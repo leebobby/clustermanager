@@ -143,6 +143,8 @@ body {
 .cm-chip--fail { color: var(--cm-crit); background: var(--cm-crit-bg); border-color: var(--cm-crit-line); }
 .cm-chip--idle { color: var(--cm-idle); background: var(--cm-idle-bg); border-color: var(--cm-idle-line); }
 .cm-chip--brand { color: var(--cm-brand); background: var(--cm-brand-tint); border-color: var(--cm-brand-line); }
+/* 表格里一格放好几个状态时用, 比默认的窄一圈 */
+.cm-chip--tiny { padding: 0 7px; font-size: 11px; line-height: 1.6; }
 
 .cm-dot {
   display: inline-block;

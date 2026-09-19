@@ -8,8 +8,7 @@
 不碰数据库、不需要先有真节点 —— 这正是"搞模板是为了能快速生成某个产品机台的
 组网图"那句话的落点。
 
-实际建一套集群走 /api/clusters; 本模块的 /preview 与 /apply 是不带集群的散装用法,
-留给"往已有集群里补几台"这种场景。
+选机台类型、把节点加载出来走 /api/workspace; 本模块管的是模板本身。
 """
 
 from typing import Any, Dict, List, Optional
@@ -18,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from models.node import Cluster, Node, get_db
+from models.node import Node, get_db
 from services import template_service, topology_service
 
 router = APIRouter()
@@ -27,9 +26,14 @@ router = APIRouter()
 # ── Pydantic 模型 ─────────────────────────────────────────────────────────────
 
 class PlaneSpec(BaseModel):
-    """角色接入某个平面的声明 —— 组网图和诊断项都从这里推导"""
+    """
+    角色接入某个平面的声明 —— 组网图和诊断项都从这里推导。
+
+    prefixes 是列表: 同一个平面上可以有多块网卡。Master 数据面就是四个 IP ——
+    前段 DPDK 两个 + 后段 RDMA 两个。
+    """
     plane: str                       # management / control / data_front / data_back
-    prefix: str = ""                 # 网段前缀, 如 172.16.3.
+    prefixes: List[str] = []         # 网段前缀, 如 ["200.1.1.", "200.1.2."]
     protocol: str = ""               # DPDK / RDMA, 仅数据面有意义
     bandwidth: str = ""
     switch: str = ""
@@ -74,7 +78,6 @@ class TemplatesSave(BaseModel):
 class ApplyRequest(BaseModel):
     product: str
     machine_type: str
-    cluster_id: Optional[int] = None
 
 
 # ── 当前占用情况 ──────────────────────────────────────────────────────────────
@@ -170,7 +173,7 @@ def template_topology(
     只按模板画组网图 —— 装机之前就能确认组网是不是想要的那样。
 
     这里不查数据库: 节点是按模板排出来的规划值, 状态一律 planned。要看实际状态
-    请用 /api/clusters/{id}/topology。
+    请用 /api/workspace/topology。
     """
     product_tpl, machine = _locate(product, machine_type)
     return topology_service.build(product_tpl, machine)
@@ -198,10 +201,10 @@ def preview(
 @router.post("/apply")
 def apply_template(req: ApplyRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
     """
-    按产品 + 机台类型批量创建节点。
+    按产品 + 机台类型批量创建节点, 避开已被占用的主机名 / IP。
 
-    给了 cluster_id 就挂到那套集群下; 不给则创建无归属节点 —— 正常流程是走
-    POST /api/clusters 直接建集群, 那条路会一并把节点排好。
+    正常流程是 PUT /api/workspace 选机台类型, 那条路会把节点整体对齐到模板。
+    这个接口留给"往现有节点表里补几台"这种零散场景。
     """
     planned, conflicts = _expand(req.product, req.machine_type, db)
     if not planned:
@@ -210,23 +213,15 @@ def apply_template(req: ApplyRequest, db: Session = Depends(get_db)) -> Dict[str
             detail="没有可创建的节点" + (f": {'; '.join(conflicts)}" if conflicts else ""),
         )
 
-    cluster_id = None
-    if req.cluster_id is not None:
-        cluster = db.query(Cluster).filter(Cluster.id == req.cluster_id).first()
-        if not cluster:
-            raise HTTPException(status_code=404, detail=f"集群不存在: {req.cluster_id}")
-        cluster_id = cluster.id
-
     created = []
     for spec in planned:
-        db.add(Node(cluster_id=cluster_id, **spec))
+        db.add(Node(**spec))
         created.append(spec["hostname"])
     db.commit()
 
     return {
         "product": req.product,
         "machine_type": req.machine_type,
-        "cluster_id": cluster_id,
         "created": len(created),
         "hostnames": created,
         "conflicts": conflicts,

@@ -1,11 +1,13 @@
 """
-机台模板服务 —— 三层结构: 产品 → 机台类型 → (实例化出)集群。
+机台模板服务 —— 两层: 产品 → 机台类型。
 
   产品 (product)      定义本产品共用的角色配置: 主机名前缀、每个角色接哪几个
                       平面、网段与起始序号、数据面协议、硬件规格、角色专项检查
   机台类型 (machine)  只定义每种角色各几台 —— 同一产品下不同机台类型的区别就
                       在服务器台数, 其余配置沿用产品级定义
-  集群 (cluster)      现场一台真机台 = 一套集群, 存数据库(见 models.node.Cluster)
+
+本工具一次只对着一台机台, 所以没有"集群实例"这一层: 打开时选一个机台类型,
+节点就按模板直接加载出来(见 services/workspace_service.py)。
 
 角色以 `key` 为标识(host / master / slave / subswath / gstorage ...), 机台类型的
 counts 按 key 索引。key 一旦定下就不再变, 主机名前缀可以随便改而不会串台 ——
@@ -64,7 +66,7 @@ CHECKS: Dict[str, Dict] = {
 _DEFAULT_TEMPLATES: Dict = {
     "_comment": (
         "机台模板 —— 产品定义共用的角色配置, 机台类型只定义各角色的台数。"
-        "可直接编辑本文件, 或在集群管理页维护。"
+        "可直接编辑本文件, 或在「机台与模板」页维护。"
     ),
     "products": [
         {
@@ -80,8 +82,8 @@ _DEFAULT_TEMPLATES: Dict = {
                     "hostname_start": 1,
                     "ip_start": 10,
                     "planes": [
-                        {"plane": "management", "prefix": "172.16.0."},
-                        {"plane": "control", "prefix": "172.16.3."},
+                        {"plane": "management", "prefixes": ["172.16.0."]},
+                        {"plane": "control", "prefixes": ["172.16.3."]},
                     ],
                     "checks": ["ping", "bmc", "ssh", "pxe_service"],
                     "os_version": "openEuler 22.03 LTS",
@@ -98,12 +100,16 @@ _DEFAULT_TEMPLATES: Dict = {
                     "role": "compute",
                     "hostname_start": 1,
                     "ip_start": 11,
+                    # Master 数据面 100G x 4: 前段 DPDK 两块 + 后段 RDMA 两块
                     "planes": [
-                        {"plane": "management", "prefix": "172.16.0."},
-                        {"plane": "control", "prefix": "172.16.3."},
-                        {"plane": "data_front", "prefix": "200.1.1.", "protocol": "DPDK"},
+                        {"plane": "management", "prefixes": ["172.16.0."]},
+                        {"plane": "control", "prefixes": ["172.16.3."]},
+                        {"plane": "data_front", "prefixes": ["200.1.1.", "200.1.2."],
+                         "protocol": "DPDK"},
+                        {"plane": "data_back", "prefixes": ["100.1.1.", "100.1.2."],
+                         "protocol": "RDMA"},
                     ],
-                    "checks": ["ping", "bmc", "ssh", "dpdk_port"],
+                    "checks": ["ping", "bmc", "ssh", "dpdk_port", "rdma_link"],
                     "os_version": "openEuler 22.03 LTS",
                     "cpu_cores": 128,
                     "memory_gb": 512,
@@ -118,9 +124,9 @@ _DEFAULT_TEMPLATES: Dict = {
                     "hostname_start": 1,
                     "ip_start": 51,
                     "planes": [
-                        {"plane": "management", "prefix": "172.16.0."},
-                        {"plane": "control", "prefix": "172.16.3."},
-                        {"plane": "data_back", "prefix": "100.1.1.", "protocol": "RDMA"},
+                        {"plane": "management", "prefixes": ["172.16.0."]},
+                        {"plane": "control", "prefixes": ["172.16.3."]},
+                        {"plane": "data_back", "prefixes": ["100.1.1."], "protocol": "RDMA"},
                     ],
                     "checks": ["ping", "bmc", "ssh", "rdma_link", "nfs_mount"],
                     "os_version": "openEuler 22.03 LTS",
@@ -137,9 +143,9 @@ _DEFAULT_TEMPLATES: Dict = {
                     "hostname_start": 1,
                     "ip_start": 170,
                     "planes": [
-                        {"plane": "management", "prefix": "172.16.0."},
-                        {"plane": "control", "prefix": "172.16.3."},
-                        {"plane": "data_back", "prefix": "100.1.1.", "protocol": "RDMA"},
+                        {"plane": "management", "prefixes": ["172.16.0."]},
+                        {"plane": "control", "prefixes": ["172.16.3."]},
+                        {"plane": "data_back", "prefixes": ["100.1.1."], "protocol": "RDMA"},
                     ],
                     "checks": ["ping", "bmc", "ssh", "rdma_link", "nfs_export", "disk_usage"],
                     "os_version": "openEuler 22.03 LTS",
@@ -156,9 +162,9 @@ _DEFAULT_TEMPLATES: Dict = {
                     "hostname_start": 1,
                     "ip_start": 172,
                     "planes": [
-                        {"plane": "management", "prefix": "172.16.0."},
-                        {"plane": "control", "prefix": "172.16.3."},
-                        {"plane": "data_back", "prefix": "100.1.2.", "protocol": "RDMA"},
+                        {"plane": "management", "prefixes": ["172.16.0."]},
+                        {"plane": "control", "prefixes": ["172.16.3."]},
+                        {"plane": "data_back", "prefixes": ["100.1.2."], "protocol": "RDMA"},
                     ],
                     "checks": ["ping", "bmc", "ssh", "rdma_link", "nfs_export", "disk_usage"],
                     "os_version": "openEuler 22.03 LTS",
@@ -212,17 +218,33 @@ def slugify(text: str, fallback: str = "role") -> str:
 
 
 def _normalize_plane(raw: Dict) -> Optional[Dict]:
-    """一条平面声明; plane 不在已知取值里就丢掉 —— 写错了总比静默画错图强"""
-    plane = str((raw or {}).get("plane", "")).strip()
+    """
+    一条平面声明; plane 不在已知取值里就丢掉 —— 写错了总比静默画错图强。
+
+    prefixes 是个列表: 一个角色在同一个平面上可以有多块网卡。Master 就是这样 ——
+    数据面四个 IP, 前段 DPDK 两个 + 后段 RDMA 两个, 对应 README 里的 100G x 4。
+    老写法 prefix(单个字符串)照样读得进来。
+    """
+    raw = raw or {}
+    plane = str(raw.get("plane", "")).strip()
     if plane not in PLANES:
         return None
     meta = PLANES[plane]
+
+    prefixes = raw.get("prefixes")
+    if prefixes is None:
+        one = str(raw.get("prefix", "")).strip()
+        prefixes = [one] if one else []
+    elif isinstance(prefixes, str):
+        prefixes = [prefixes]
+    prefixes = [str(x).strip() for x in prefixes if str(x).strip()]
+
     return {
         "plane": plane,
-        "prefix": str((raw or {}).get("prefix", "")).strip(),
-        "protocol": str((raw or {}).get("protocol", "")).strip(),
-        "bandwidth": str((raw or {}).get("bandwidth", "")).strip() or meta["bandwidth"],
-        "switch": str((raw or {}).get("switch", "")).strip() or meta["switch"],
+        "prefixes": prefixes,
+        "protocol": str(raw.get("protocol", "")).strip(),
+        "bandwidth": str(raw.get("bandwidth", "")).strip() or meta["bandwidth"],
+        "switch": str(raw.get("switch", "")).strip() or meta["switch"],
     }
 
 
@@ -328,7 +350,7 @@ def _planes_from_flat(raw: Dict) -> List[Dict]:
                               ("data_prefix", data_plane)):
         prefix = str(raw.get(prefix_key) or "").strip()
         if prefix:
-            out.append({"plane": plane, "prefix": prefix,
+            out.append({"plane": plane, "prefixes": [prefix],
                         "protocol": protocol if plane.startswith("data") else ""})
     return out
 
@@ -504,10 +526,15 @@ def plan_node(role: Dict, offset: int) -> Dict:
       各平面 IP = `{平面前缀}.{ip_start + n}`
     对应 README 的 v2 规划 —— master-01 ↔ 172.16.3.11, gstorage-01 ↔ .172。
 
-    平面 IP 同时填进 Node 上原有的扁平字段, 这样组网图、诊断、PXE 那些按
-    mgmt_ip / ctrl_ip / data_ip 取值的既有代码不用改。
+    一个平面可以有多块网卡, 所以真正的出处是 plane_ips: {平面: [ip, ...]}。
+    Master 就是这样 —— 数据面四个 IP, 前段 DPDK 两个 + 后段 RDMA 两个。
+
+    同时把第一个 IP 填进 Node 上原有的扁平字段(mgmt_ip / ctrl_ip / data_ip),
+    这样组网图、PXE 那些按扁平字段取值的既有代码不用改。诊断按 plane_ips 逐个
+    探 —— 四个 IP 就是四项检查, 断哪一个都看得见。
     """
     index = role["ip_start"] + offset
+    plane_ips: Dict[str, List[str]] = {}
     spec = {
         "hostname": f"{role['hostname_prefix']}-{role['hostname_start'] + offset:02d}",
         "node_type": role["node_type"],
@@ -520,20 +547,33 @@ def plan_node(role: Dict, offset: int) -> Dict:
         "status": "offline",
         "mgmt_ip": None, "bmc_ip": None, "ctrl_ip": None,
         "data_ip": None, "data_protocol": None,
+        "plane_ips": plane_ips,
     }
     for p in role["planes"]:
-        ip = _compose(p["prefix"], index)
-        if not ip:
+        ips = [ip for ip in (_compose(px, index) for px in p["prefixes"]) if ip]
+        if not ips:
             continue
+        plane_ips[p["plane"]] = ips
         if p["plane"] == "management":
             # 管理面与 BMC 同网段, 沿用 wave-deploy 里 mgmt_ip = bmc_ip 的既有约定
-            spec["mgmt_ip"] = spec["bmc_ip"] = ip
+            spec["mgmt_ip"] = spec["bmc_ip"] = ips[0]
         elif p["plane"] == "control":
-            spec["ctrl_ip"] = ip
-        else:
-            spec["data_ip"] = ip
+            spec["ctrl_ip"] = ips[0]
+        elif not spec["data_ip"]:
+            spec["data_ip"] = ips[0]
             spec["data_protocol"] = p["protocol"] or None
     return spec
+
+
+def all_ips(spec: Dict) -> set:
+    """一台节点占用的全部 IP —— 展开时用它避让, 不能只看扁平字段"""
+    out = set()
+    for ips in (spec.get("plane_ips") or {}).values():
+        out |= {ip for ip in ips if ip}
+    for key in ("mgmt_ip", "bmc_ip", "ctrl_ip", "data_ip"):
+        if spec.get(key):
+            out.add(spec[key])
+    return out
 
 
 def expand(
@@ -567,8 +607,7 @@ def expand(
 
         while placed < count and offset <= limit:
             spec = plan_node(role, offset)
-            candidate_ips = {ip for ip in (spec["mgmt_ip"], spec["bmc_ip"],
-                                           spec["ctrl_ip"], spec["data_ip"]) if ip}
+            candidate_ips = all_ips(spec)
             if spec["hostname"] in used_hostnames or (candidate_ips & used_ips):
                 offset += 1
                 skipped += 1
