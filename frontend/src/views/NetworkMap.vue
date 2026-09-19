@@ -7,7 +7,7 @@
       </div>
       <span class="hint">
         <template v-if="!live">按模板画的规划图, 装机之前就能确认组网对不对</template>
-        <template v-else>线的颜色 = 通断。灰色是还没测过 —— 先到「一键诊断」跑一次</template>
+        <template v-else>线的颜色 = 通断。灰色是还没测过 —— 连通性检测还没开放, 先看模板组网</template>
       </span>
       <div class="spacer"></div>
       <span class="who cm-mono">{{ ws.product }} / {{ ws.machineType }}</span>
@@ -15,6 +15,13 @@
     </header>
 
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" />
+    <el-alert
+      v-if="graph && graph.problems && graph.problems.length"
+      type="warning" show-icon :closable="false" title="这张图画不全, 原因在模板里"
+    >
+      <div v-for="m in graph.problems" :key="m" class="mismatch">{{ m }}</div>
+      <router-link to="/machines" class="fix-link">去「机台与模板」改</router-link>
+    </el-alert>
     <el-alert
       v-if="graph && graph.mismatches && graph.mismatches.length"
       type="warning" show-icon :closable="false" title="实际台数与模板不一致"
@@ -54,10 +61,16 @@
     </section>
 
     <section class="canvas cm-card" v-loading="loading">
-      <el-empty v-if="!graph" :description="emptyText" />
+      <!-- 一条平面都没有 = 模板里的角色没配平面, 这时候画布上什么也画不出来。
+           以前这里会照着空的 buses 去画管理站引线, 直接渲染失败成一片白板 -->
+      <el-empty v-if="!graph || !layout.buses.length" :description="emptyText">
+        <router-link v-if="ready" to="/machines">
+          <el-button type="primary">去「机台与模板」配平面和网段</el-button>
+        </router-link>
+      </el-empty>
       <div v-else class="scroller">
         <svg :width="layout.width" :height="layout.height" role="img" :aria-label="ariaLabel">
-          <g v-if="layout.station">
+          <g v-if="layout.station && layout.buses.length">
             <rect :x="layout.station.x" :y="layout.station.y" :width="layout.station.w" height="46"
               rx="9" :fill="UI.surface2" :stroke="UI.border" stroke-width="1.5" />
             <text :x="layout.station.x + 16" :y="layout.station.y + 20" font-size="13" font-weight="700"
@@ -211,7 +224,8 @@ const PLANE_SUB = {
   data_back: '后段 RDMA',
 }
 
-const live = ref(true)
+// 默认看模板组网 —— 实况的通断要靠连通性检测填, 那一块还没开放, 一进来全是灰的没意义
+const live = ref(false)
 const loading = ref(false)
 const error = ref('')
 const graph = ref(null)
@@ -220,7 +234,15 @@ const selected = ref(null)
 
 const focusHost = computed(() => route.query.focus || '')
 const legendPlanes = computed(() => graph.value?.planes || [])
-const emptyText = computed(() => (ready.value ? '这个机台类型下还没有节点' : '先选一个机台类型'))
+const emptyText = computed(() => {
+  if (!ready.value) return '先选一个机台类型'
+  const g = graph.value
+  if (!g) return '这个机台类型下还没有节点'
+  if (!(g.planes || []).length) {
+    return '模板里的角色还没配平面和网段, 组网图画不出来 —— 节点的 IP 也是由平面网段生成的'
+  }
+  return '这个机台类型下还没有节点'
+})
 const ariaLabel = computed(() => {
   if (!graph.value) return '组网图'
   const names = (graph.value.groups || []).map(g => `${g.label} ${g.count} 台`).join('、')
@@ -394,6 +416,13 @@ onMounted(() => {
 .mode.is-on { background: var(--cm-surface); color: var(--cm-text); border-color: var(--cm-border); font-weight: 700; }
 .hint { font-size: 12px; color: var(--cm-text-2); }
 .who { font-size: 12px; color: var(--cm-text-3); }
+.fix-link {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--cm-brand);
+}
+
 .mismatch { font-size: 13px; line-height: 1.8; }
 
 .legend { display: flex; align-items: center; gap: 20px; padding: 10px 18px; flex-wrap: wrap; }

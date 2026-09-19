@@ -14,6 +14,16 @@
             <el-button size="small" :loading="reloading" :disabled="!ready" @click="reload">重新加载</el-button>
           </header>
 
+          <el-alert
+            v-if="noIpNodes.length" type="warning" show-icon :closable="false"
+            :title="`${noIpNodes.length} 台节点一个 IP 都没有`"
+          >
+            <div class="issue">
+              IP 是按模板里角色的平面网段生成的。这些节点的角色在模板里没配平面或没填网段:
+              {{ noIpRoles.join('、') }} —— 到「模板」页补上, 再回来点「重新加载」。
+            </div>
+          </el-alert>
+
           <el-table :data="nodes" class="cm-card" empty-text="还没有节点" max-height="620">
             <el-table-column prop="hostname" label="主机名" min-width="130">
               <template #default="{ row }"><span class="cm-mono bold">{{ row.hostname }}</span></template>
@@ -69,6 +79,17 @@
           </header>
 
           <el-alert v-if="tplError" :title="tplError" type="error" show-icon :closable="false" />
+          <el-alert
+            v-if="tplProblems.length" type="error" show-icon :closable="false"
+            title="模板里有画不出图的地方, 保存前要先改掉"
+          >
+            <div v-for="m in tplProblems" :key="m" class="issue">{{ m }}</div>
+          </el-alert>
+          <el-alert
+            v-if="tplWarnings.length" type="warning" show-icon :closable="false" title="提醒"
+          >
+            <div v-for="m in tplWarnings" :key="m" class="issue">{{ m }}</div>
+          </el-alert>
 
           <el-tabs v-if="draft.length" v-model="activeProduct" type="border-card" class="cm-card">
             <el-tab-pane
@@ -88,10 +109,15 @@
                   <span class="sub-title">角色</span>
                   <span class="sub-hint">key 是角色标识, 定下就别改 —— 机台类型的台数按它索引。主机名前缀可以随便改。</span>
                   <div class="spacer"></div>
-                  <el-button size="small" @click="p.roles.push(emptyRole())">加角色</el-button>
+                  <el-button size="small" @click="addRole(p)">加角色</el-button>
                 </div>
 
-                <el-table :data="p.roles" size="small" border>
+                <el-table
+                  :data="p.roles" size="small" border
+                  row-key="_uid"
+                  :expand-row-keys="expanded"
+                  @expand-change="onExpand"
+                >
                   <el-table-column type="expand">
                     <template #default="{ row }">
                       <div class="expand">
@@ -178,7 +204,10 @@
                     </template>
                   </el-table-column>
                   <el-table-column label="key" width="126">
-                    <template #default="{ row }"><el-input v-model="row.key" size="small" placeholder="master" /></template>
+                    <template #default="{ row }">
+                      <el-input v-model="row.key" size="small" placeholder="master"
+                        @blur="normalizeKey(p, row)" />
+                    </template>
                   </el-table-column>
                   <el-table-column label="显示名" width="136">
                     <template #default="{ row }"><el-input v-model="row.label" size="small" placeholder="Master" /></template>
@@ -200,8 +229,12 @@
                       <span v-for="pl in row.planes" :key="pl.plane" class="plane-tag"
                         :style="{ color: PLANE_COLOR[pl.plane] }">
                         {{ SHORT_PLANE[pl.plane] }}<template v-if="pl.prefixes.length > 1">&times;{{ pl.prefixes.length }}</template>
+                        <span v-if="!pl.prefixes.some(x => x)" class="tag-bad">无网段</span>
                       </span>
-                      <span v-if="!row.planes.length" class="muted">未配</span>
+                      <!-- 没配平面 = 节点不会有 IP、组网图画不出来。这是最容易漏的一格, 要喊出来 -->
+                      <a v-if="!row.planes.length" class="tag-bad-link" @click="expandRole(row)">
+                        未配平面 → 不会生成 IP, 点这里配
+                      </a>
                     </template>
                   </el-table-column>
                   <el-table-column width="56" align="right">
@@ -306,20 +339,58 @@ const meta = ref({ planes: [], checks: [] })
 const activeProduct = ref('0')
 const saving = ref(false)
 const tplError = ref('')
+const tplProblems = ref([])
+const tplWarnings = ref([])
+const expanded = ref([])
 
 const nodeOpen = ref(false)
 const savingNode = ref(false)
 const nodeForm = ref({})
 
 const currentRoles = computed(() => saved.value.find(p => p.name === ws.product)?.roles || [])
+
+/* 没有任何 IP 的节点 —— 几乎总是它那个角色在模板里没配平面 */
+const noIpNodes = computed(() =>
+  nodes.value.filter(n => !Object.values(n.plane_ips || {}).some(v => (v || []).length)))
+const noIpRoles = computed(() => [...new Set(noIpNodes.value.map(n => n.role_key || n.node_type))])
+
+const onExpand = (row, rows) => { expanded.value = rows.map(r => r._uid) }
+const expandRole = (row) => {
+  if (!expanded.value.includes(row._uid)) expanded.value = [...expanded.value, row._uid]
+}
 const statusClass = (s) => ({ online: 'pass', degraded: 'warn', offline: 'fail' }[s] || 'idle')
 const total = (m) => Object.values(m.counts || {}).reduce((a, b) => a + (Number(b) || 0), 0)
 
-const emptyRole = () => ({
-  key: '', label: '', node_type: 'slave', hostname_prefix: 'node', role: '',
-  hostname_start: 1, ip_start: 1, planes: [], checks: ['ping'],
-  os_version: '', cpu_cores: null, memory_gb: null, disk_gb: null, note: '',
-})
+let uid = 0
+const nextUid = () => `r${++uid}`
+
+/*
+ * 新角色默认就带上管理面和控制面, 网段沿用同产品里已有角色的 ——
+ * 同一个产品的管理面 / 控制面几乎总是同一个网段。
+ *
+ * 之前默认是 planes: [], 而平面的配置藏在表格的展开行里, 很容易整行没配就保存:
+ * 节点照样建出来, 但 IP 全是空的(IP 全部由平面网段生成), 组网图也是一片空白。
+ */
+const emptyRole = (product = null) => {
+  const borrow = (plane) => {
+    for (const r of (product?.roles || [])) {
+      const hit = (r.planes || []).find(p => p.plane === plane)
+      if (hit && (hit.prefixes || []).some(x => x)) return [...hit.prefixes]
+    }
+    return ['']
+  }
+  return {
+    _uid: nextUid(),
+    key: '', label: '', node_type: 'slave', hostname_prefix: 'node', role: '',
+    hostname_start: 1, ip_start: 1,
+    planes: [
+      { plane: 'management', prefixes: borrow('management'), protocol: '', bandwidth: '', switch: '' },
+      { plane: 'control', prefixes: borrow('control'), protocol: '', bandwidth: '', switch: '' },
+    ],
+    checks: ['ping'],
+    os_version: '', cpu_cores: null, memory_gb: null, disk_gb: null, note: '',
+  }
+}
 
 const hasPlane = (role, key) => (role.planes || []).some(p => p.plane === key)
 const planeOf = (role, key) => (role.planes || []).find(p => p.plane === key) || { prefixes: [] }
@@ -329,13 +400,39 @@ const togglePlane = (role, key, on) => {
 }
 
 const addProduct = () => {
-  draft.value.push({ name: '', description: '', roles: [emptyRole()], machine_types: [] })
+  const role = emptyRole()
+  draft.value.push({ name: '', description: '', roles: [role], machine_types: [] })
   activeProduct.value = String(draft.value.length - 1)
+  expanded.value = [role._uid]
+}
+
+/** 加角色 —— 顺手展开这一行, 平面和网段就在里面, 不配的话节点不会有 IP */
+const addRole = (product) => {
+  const role = emptyRole(product)
+  product.roles.push(role)
+  expanded.value = [...expanded.value, role._uid]
 }
 const addMachine = (p) => {
   const counts = {}
-  p.roles.forEach(r => { counts[r.key || r.hostname_prefix] = 0 })
+  p.roles.forEach(r => { if (r.key) counts[r.key] = 0 })
   p.machine_types.push({ name: '', description: '', counts })
+}
+
+/* key 是拿来索引台数的, 所见即所存: 失焦时按后端那套规则规整一遍, 并把机台类型里
+ * 的台数跟着改键 —— 不然改一下 key, 那一列的台数就在界面上归零了 */
+const normalizeKey = (product, role) => {
+  const before = role.key || ''
+  const after = before.trim().toLowerCase().replace(/[^\w\u4e00-\u9fa5-]+/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+  if (after === before) return
+  role.key = after
+  product.machine_types.forEach(m => {
+    if (!after) return
+    if (Object.prototype.hasOwnProperty.call(m.counts || {}, before)) {
+      m.counts[after] = m.counts[before]
+      delete m.counts[before]
+    }
+  })
 }
 
 const loadNodes = async () => {
@@ -348,6 +445,12 @@ const loadNodes = async () => {
   }
 }
 
+/* 表格的受控展开要一个不随输入变化的 row-key; key 是用户边打边改的, 不能拿来当它 */
+const withUids = (products) => JSON.parse(JSON.stringify(products)).map(p => ({
+  ...p,
+  roles: (p.roles || []).map(r => ({ ...r, _uid: nextUid() })),
+}))
+
 const loadTemplates = async () => {
   try {
     const [{ data }, { data: m }] = await Promise.all([
@@ -356,7 +459,9 @@ const loadTemplates = async () => {
     ])
     saved.value = data.products || []
     meta.value = m
-    draft.value = JSON.parse(JSON.stringify(saved.value))
+    tplProblems.value = data.problems || []
+    tplWarnings.value = data.warnings || []
+    draft.value = withUids(data.products || [])
   } catch (e) {
     tplError.value = e?.response?.data?.detail || e.message || '读取模板失败'
   }
@@ -364,20 +469,63 @@ const loadTemplates = async () => {
 
 const saveTemplates = async () => {
   tplError.value = ''
+  tplProblems.value = []
   for (const p of draft.value) {
     if (!p.name.trim()) { tplError.value = '有产品没填名称'; return }
     const keys = p.roles.map(r => (r.key || '').trim())
     if (keys.some(k => !k)) { tplError.value = `产品「${p.name}」里有角色没填 key`; return }
     const dup = keys.filter((k, i) => keys.indexOf(k) !== i)
     if (dup.length) { tplError.value = `产品「${p.name}」里 key 重复: ${[...new Set(dup)].join(', ')}`; return }
+    // 节点的 IP 全部由平面网段生成。没配平面 / 没填网段就保存, 存下去不报错, 但
+    // 节点会没有 IP、组网图会是空的 —— 在这儿挡住, 并把那一行展开给人看
+    for (const r of p.roles) {
+      const name = r.label || r.key
+      if (!(r.planes || []).length) {
+        expandRole(r)
+        tplError.value = `产品「${p.name}」的角色「${name}」没勾任何平面, 这样生成的节点不会有 IP, 组网图也画不出来`
+        return
+      }
+      for (const pl of r.planes) {
+        if (!(pl.prefixes || []).some(x => String(x || '').trim())) {
+          expandRole(r)
+          tplError.value = `产品「${p.name}」的角色「${name}」勾了「${PLANE_LABEL[pl.plane] || pl.plane}」但没填网段前缀, 这个平面不会生成 IP`
+          return
+        }
+      }
+    }
   }
   saving.value = true
   try {
-    const { data } = await axios.put('/api/templates', { products: draft.value })
+    const payload = {
+      products: draft.value.map(p => ({
+        ...p,
+        roles: p.roles.map(({ _uid, ...r }) => r),   // _uid 是界面自己用的, 不入库
+      })),
+    }
+    const { data } = await axios.put('/api/templates', payload)
     saved.value = data.products || []
-    draft.value = JSON.parse(JSON.stringify(saved.value))
+    tplWarnings.value = data.warnings || []
+    draft.value = withUids(data.products || [])
     await loadWorkspace({ force: true })
-    ElMessage.success('模板已保存。到「节点」页点「重新加载」让节点跟着更新')
+
+    // 存完顺手把节点对齐一遍 —— 改了模板还要自己想起来去点「重新加载」, 中间那段
+    // 时间里节点表和模板是不一致的, 人看到的就是"IP 没按模板生成"
+    let synced = null
+    if (ready.value) {
+      try {
+        synced = await reloadNodes()
+        await loadNodes()
+      } catch (e) { /* 模板存住了才是关键, 对齐失败就让人自己点一下「重新加载」 */ }
+    }
+    const bits = []
+    if (synced?.created?.length) bits.push(`新增 ${synced.created.length}`)
+    if (synced?.updated?.length) bits.push(`更新 ${synced.updated.length}`)
+    if (synced?.removed?.length) bits.push(`移除 ${synced.removed.length}`)
+    ElMessage.success(
+      !ready.value ? '模板已保存。左上角「机台」里选一个机台类型, 节点就按模板加载出来'
+      : bits.length ? `模板已保存, 当前机台的节点已对齐: ${bits.join(' · ')}`
+      : '模板已保存, 当前机台的节点已经和模板一致'
+    )
   } catch (e) {
     tplError.value = e?.response?.data?.detail || e.message || '保存失败'
   } finally {
@@ -479,6 +627,25 @@ onMounted(() => {
 <style scoped>
 .machines { display: flex; flex-direction: column; }
 .spacer { flex-grow: 1; }
+.tag-bad {
+  margin-left: 3px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--cm-crit-bg);
+  color: var(--cm-crit);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.tag-bad-link {
+  color: var(--cm-crit);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.issue { font-size: 12.5px; line-height: 1.8; }
+
 .muted { color: var(--cm-text-3); font-size: 12px; }
 .bold { font-weight: 700; color: var(--cm-text); }
 

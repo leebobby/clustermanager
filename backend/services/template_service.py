@@ -212,9 +212,14 @@ _ROLE_DEFAULTS: Dict = {
 # ── 规整 ──────────────────────────────────────────────────────────────────────
 
 def slugify(text: str, fallback: str = "role") -> str:
-    """把任意文本压成一个可做 key 的短标识"""
-    s = re.sub(r"[^0-9a-zA-Z_-]+", "-", str(text or "").strip().lower()).strip("-_")
-    return s or fallback
+    """
+    把任意文本压成一个可做 key 的短标识。
+
+    保留 Unicode 词字符, 所以"主节点"原样留着 —— 上一版用的是 [0-9a-zA-Z_-], 中文 key
+    会被整条压成空再落到 fallback, 两个中文角色就都叫 role 了。
+    """
+    s = re.sub(r"[^\w-]+", "-", str(text or "").strip().lower(), flags=re.UNICODE)
+    return s.strip("-_") or fallback
 
 
 def _normalize_plane(raw: Dict) -> Optional[Dict]:
@@ -305,13 +310,29 @@ def _normalize_machine(raw: Dict, role_keys: List[str]) -> Dict:
 
 
 def _normalize_product(raw: Dict) -> Optional[Dict]:
+    """
+    规整一个产品。
+
+    这里有一处非做不可的事: counts 要跟着 key 的规整一起改键。
+    界面上 key 就是个自由输入框, 用户敲 "Master" 或者 "主 节点" 都很正常, 而
+    _normalize_role 会把它规整成 "master" / "主-节点"。counts 是按用户敲的那个键
+    写进来的, 不改键的话 _normalize_machine 找不到、按 0 补, 台数就全没了 ——
+    机台类型变成 0 台, 于是节点一台不生成、IP 全空、组网图也是空的。
+    """
     name = str((raw or {}).get("name", "")).strip()
     if not name:
         return None
 
     roles: List[Dict] = []
     seen = set()
+    # counts 按哪种写法索引都认。分三档是为了别认错人: 存下来的 key 最硬, 其次是
+    # 用户原样敲进来的, 最后才是主机名前缀(老格式那样索引的)。某个角色拿前缀当别名,
+    # 而这个前缀正好是另一个角色的 key —— 那必须算后者的。
+    exact: Dict[str, str] = {}
+    typed: Dict[str, str] = {}
+    by_prefix: Dict[str, str] = {}
     for r in (raw.get("roles") or []):
+        raw_key = str((r or {}).get("key") or "").strip()
         role = _normalize_role(r)
         base = role["key"]
         if base in seen:            # key 撞了就加后缀, 否则 counts 会串台
@@ -321,12 +342,33 @@ def _normalize_product(raw: Dict) -> Optional[Dict]:
             role["key"] = f"{base}-{n}"
         seen.add(role["key"])
         roles.append(role)
+        exact.setdefault(role["key"], role["key"])
+        for alias in (raw_key, base):
+            if alias:
+                typed.setdefault(alias, role["key"])
+        prefix = str((r or {}).get("hostname_prefix") or "").strip()
+        if prefix:
+            by_prefix.setdefault(prefix, role["key"])
 
+    remap = {**by_prefix, **typed, **exact}
     role_keys = [r["key"] for r in roles]
-    machines = [
-        m for m in (_normalize_machine(x, role_keys) for x in (raw.get("machine_types") or []))
-        if m["name"]
-    ]
+    machines = []
+    for x in (raw.get("machine_types") or []):
+        x = dict(x or {})
+        counts: Dict[str, int] = {}
+        for k, v in (x.get("counts") or {}).items():
+            k = str(k)
+            key = remap.get(k) or remap.get(k.strip()) or k.strip()
+            try:
+                v = max(0, int(v or 0))
+            except (TypeError, ValueError):
+                v = 0
+            # 两个别名映到同一个角色时取大的, 别让一个 0 把真台数盖掉
+            counts[key] = max(counts.get(key, 0), v)
+        x["counts"] = counts
+        machine = _normalize_machine(x, role_keys)
+        if machine["name"]:
+            machines.append(machine)
     return {
         "name": name,
         "description": str(raw.get("description", "")),
@@ -459,6 +501,57 @@ def _normalize(data: Dict) -> Dict:
             "products": products}
 
 
+# ── 体检 ──────────────────────────────────────────────────────────────────────
+
+def validate(data: Dict) -> Tuple[List[str], List[str]]:
+    """
+    模板存下去之后画不画得出东西 —— 返回 (必须挡住的, 只提示的)。
+
+    这里挡的都是"存进去也不会报错, 但后面全是空的"那一类。之前踩过两次:
+
+      角色没勾平面      节点照样建出来, 但一个 IP 都没有(IP 全部由平面网段生成),
+                        组网图也没有任何总线和连线, 界面上就是一片空白 —— 人根本
+                        看不出来是模板没配完
+      勾了平面没填网段  同上, 只是范围缩到那一个平面
+
+    读的时候不做这个检查 —— 老文件、手改坏的文件还得能打开去修。只在写入时挡。
+    """
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    for product in (data.get("products") or []):
+        pname = product.get("name") or "(未命名)"
+        for role in (product.get("roles") or []):
+            label = role.get("label") or role.get("key") or "(未命名角色)"
+            planes = role.get("planes") or []
+            if not planes:
+                errors.append(
+                    f"产品「{pname}」的角色「{label}」没勾任何平面。"
+                    f"节点的 IP 全部由平面网段生成, 不勾平面就一个 IP 都没有, "
+                    f"组网图也画不出来 —— 展开这一行, 勾上管理面/控制面/数据面并填网段。"
+                )
+                continue
+            for plane in planes:
+                if not (plane.get("prefixes") or []):
+                    pl = PLANES.get(plane.get("plane"), {}).get("label", plane.get("plane"))
+                    errors.append(
+                        f"产品「{pname}」的角色「{label}」勾了「{pl}」但没填网段前缀, "
+                        f"这个平面不会生成 IP。填一个网段(如 172.16.0.), 或者把这个平面取消勾选。"
+                    )
+
+        machines = product.get("machine_types") or []
+        if not machines:
+            warnings.append(f"产品「{pname}」下还没有机台类型, 打开工具时选不到它。")
+        for machine in machines:
+            if sum((machine.get("counts") or {}).values()) <= 0:
+                warnings.append(
+                    f"产品「{pname}」的机台类型「{machine.get('name')}」各角色台数都是 0, "
+                    f"选它会一台节点都没有。"
+                )
+
+    return errors, warnings
+
+
 # ── 读写 ──────────────────────────────────────────────────────────────────────
 
 def read_templates() -> Dict:
@@ -544,7 +637,9 @@ def plan_node(role: Dict, offset: int) -> Dict:
         "cpu_cores": role["cpu_cores"],
         "memory_gb": role["memory_gb"],
         "disk_gb": role["disk_gb"],
-        "status": "offline",
+        # 刚按模板生成的节点是"还没测过", 不是"断了"。写 offline 的话界面上一片红,
+        # 等于凭空报了一堆没测过的故障
+        "status": "unknown",
         "mgmt_ip": None, "bmc_ip": None, "ctrl_ip": None,
         "data_ip": None, "data_protocol": None,
         "plane_ips": plane_ips,

@@ -123,18 +123,22 @@
 import { computed, onMounted, ref, watch, markRaw } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { TrendCharts, Share, Grid, Document, ArrowDown } from '@element-plus/icons-vue'
+import { Share, Grid, Document, ArrowDown } from '@element-plus/icons-vue'
 import { ws, ready, loadWorkspace, selectMachine } from '@/stores/workspace'
 
 const route = useRoute()
 const chooser = ref(false)
 const switching = ref(false)
 
+/*
+ * 一键诊断先不挂上来 —— 还没定下来怎么组织(选哪些脚本、跑多久、失败怎么判),
+ * 半成品摆在第一项只会误导现场。代码留着, 想放开就把最后那行和路由一起打开。
+ */
 const NAV = [
-  { path: '/', label: '一键诊断', icon: markRaw(TrendCharts) },
-  { path: '/network', label: '组网图', icon: markRaw(Share) },
+  { path: '/', label: '组网图', icon: markRaw(Share) },
   { path: '/machines', label: '机台与模板', icon: markRaw(Grid) },
   { path: '/logs', label: '告警与日志', icon: markRaw(Document) },
+  // { path: '/checkup', label: '一键诊断', icon: markRaw(TrendCharts) },
 ]
 
 const pageTitle = computed(() => route.meta.title || '集群运维')

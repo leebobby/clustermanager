@@ -97,6 +97,150 @@ def test_migrate_v2():
     check("bmc_prefix" not in roles["master"], "扁平网段字段已清掉")
 
 
+# ── 1b. key 被规整时台数不能丢 ────────────────────────────────────────────────
+
+def _one_role_product(raw_key, count_key, planes=None):
+    """一个角色 + 一个机台类型; counts 按 count_key 索引"""
+    if planes is None:
+        planes = [{"plane": "management", "prefixes": ["192.168.9."]}]
+    return {"products": [{
+        "name": "P",
+        "roles": [{"key": raw_key, "label": raw_key, "node_type": "slave",
+                   "hostname_prefix": "n", "ip_start": 20, "planes": planes,
+                   "checks": ["ping"]}],
+        "machine_types": [{"name": "M", "counts": {count_key: 3}}],
+    }]}
+
+
+def test_counts_survive_key_normalization():
+    section("key 被规整之后, 机台类型的台数要跟着改键")
+
+    # 界面上 key 是个自由输入框。这三种写法都会被 _normalize_role 改掉, 而 counts 是
+    # 按用户敲的那个键写进来的 —— 不跟着改键, 台数就静默变 0: 机台类型显示 0 台,
+    # 节点一台不生成, IP 全空, 组网图也是空的, 一路上没有任何一处报错
+    for raw in ("Master", "my master", "主节点", " master "):
+        data = ts._normalize(_one_role_product(raw, raw))
+        product = data["products"][0]
+        key = product["roles"][0]["key"]
+        counts = product["machine_types"][0]["counts"]
+        check(counts.get(key) == 3,
+              f"key {raw!r} 规整成 {key!r} 后台数还是 3", f"counts={counts}")
+
+    # 中文 key 不该被压成空再落到 fallback —— 两个中文角色否则都会叫 role
+    data = ts._normalize({"products": [{
+        "name": "P",
+        "roles": [
+            {"key": "主节点", "node_type": "a", "hostname_prefix": "a",
+             "planes": [{"plane": "management", "prefixes": ["10.0.0."]}], "checks": ["ping"]},
+            {"key": "从节点", "node_type": "b", "hostname_prefix": "b",
+             "planes": [{"plane": "management", "prefixes": ["10.0.1."]}], "checks": ["ping"]},
+        ],
+        "machine_types": [{"name": "M", "counts": {"主节点": 2, "从节点": 5}}],
+    }]})
+    product = data["products"][0]
+    keys = [r["key"] for r in product["roles"]]
+    check(keys == ["主节点", "从节点"], "中文 key 原样留着, 不会两个都变成 role", str(keys))
+    check(product["machine_types"][0]["counts"] == {"主节点": 2, "从节点": 5},
+          "中文 key 的台数也对得上", str(product["machine_types"][0]["counts"]))
+
+    # counts 按老格式的 hostname_prefix 索引也认
+    data = ts._normalize(_one_role_product("master", "n"))
+    counts = data["products"][0]["machine_types"][0]["counts"]
+    check(counts.get("master") == 3, "counts 按 hostname_prefix 索引也能认出来", str(counts))
+
+    # 前缀别名不能把另一个角色的 key 抢过去: master 的前缀叫 node, 而 node 是另一个
+    # 角色真正的 key —— counts["node"] 必须算给后者
+    data = ts._normalize({"products": [{
+        "name": "P",
+        "roles": [
+            {"key": "master", "node_type": "m", "hostname_prefix": "node",
+             "planes": [{"plane": "management", "prefixes": ["10.0.0."]}], "checks": ["ping"]},
+            {"key": "node", "node_type": "n", "hostname_prefix": "slave",
+             "planes": [{"plane": "management", "prefixes": ["10.0.1."]}], "checks": ["ping"]},
+        ],
+        "machine_types": [{"name": "M", "counts": {"master": 2, "node": 7}}],
+    }]})
+    counts = data["products"][0]["machine_types"][0]["counts"]
+    check(counts == {"master": 2, "node": 7}, "前缀别名不会抢走另一个角色的 key", str(counts))
+
+
+def test_key_normalization_end_to_end():
+    section("key 规整之后, 节点和组网图都得有东西")
+
+    data = ts._normalize(_one_role_product("Master", "Master"))
+    product = data["products"][0]
+    machine = product["machine_types"][0]
+    planned, _ = ts.expand(product, machine, set(), set())
+    check(len(planned) == 3, "展开出 3 台", f"{len(planned)} 台")
+    check(all(n["status"] == "unknown" for n in planned),
+          "刚生成的节点是'还没测过'而不是'断了'", str({n["status"] for n in planned}))
+    check(all(n["mgmt_ip"] for n in planned), "每台都有管理面 IP",
+          str([n["mgmt_ip"] for n in planned]))
+    graph = topology_service.build(product, machine)
+    check(graph["total_nodes"] == 3 and len(graph["planes"]) == 1,
+          "组网图不是空的", f"nodes={graph['total_nodes']} planes={len(graph['planes'])}")
+
+
+# ── 1c. 存下去也画不出东西的模板要被挡住 ──────────────────────────────────────
+
+def test_validate_blocks_role_without_planes():
+    section("角色没配平面 —— 存下去不报错, 但节点没 IP、组网图是空的")
+
+    data = ts._normalize(_one_role_product("master", "master", planes=[]))
+    product, machine = data["products"][0], data["products"][0]["machine_types"][0]
+
+    # 先确认这确实是一条静默的坑: 节点建得出来, 但一个 IP 都没有
+    planned, _ = ts.expand(product, machine, set(), set())
+    check(len(planned) == 3 and not any(ts.all_ips(n) for n in planned),
+          "没配平面时节点照样建 3 台, 但 IP 全空 —— 所以必须在保存时挡住",
+          f"{len(planned)} 台")
+
+    graph = topology_service.build(product, machine)
+    check(not graph["planes"] and not graph["links"] and not graph["switches"],
+          "组网图没有总线 / 连线 / 交换机")
+    check(any("没勾任何平面" in x for x in graph["problems"]),
+          "组网图自己说得出为什么是空的", str(graph["problems"]))
+
+    errors, _ = ts.validate(data)
+    check(len(errors) == 1 and "没勾任何平面" in errors[0],
+          "validate 挡住并说清怎么改", str(errors))
+
+
+def test_validate_blocks_plane_without_prefix():
+    section("勾了平面但没填网段 —— 那个平面不会生成 IP")
+
+    data = ts._normalize(_one_role_product(
+        "master", "master",
+        planes=[{"plane": "management", "prefixes": ["192.168.9."]},
+                {"plane": "control", "prefixes": ["  "]}]))
+    errors, _ = ts.validate(data)
+    check(len(errors) == 1 and "没填网段前缀" in errors[0], "只报没填网段的那一个平面",
+          str(errors))
+
+    product, machine = data["products"][0], data["products"][0]["machine_types"][0]
+    planned, _ = ts.expand(product, machine, set(), set())
+    check(planned[0]["mgmt_ip"] and not planned[0]["ctrl_ip"],
+          "确实只缺控制面那一个 IP", str(planned[0]["plane_ips"]))
+
+
+def test_validate_default_template_is_clean():
+    section("内置默认模板本身要过体检")
+
+    errors, warnings = ts.validate(ts._normalize(ts._DEFAULT_TEMPLATES))
+    check(not errors, "默认模板没有错误", str(errors))
+    check(not warnings, "默认模板没有提醒", str(warnings))
+
+
+def test_validate_warns_all_zero_counts():
+    section("机台类型台数全 0 —— 提醒, 但不挡")
+
+    data = ts._normalize(_one_role_product("master", "master"))
+    data["products"][0]["machine_types"][0]["counts"]["master"] = 0
+    errors, warnings = ts.validate(data)
+    check(not errors, "不挡", str(errors))
+    check(any("台数都是 0" in x for x in warnings), "提醒一句", str(warnings))
+
+
 def test_migrate_v1():
     section("v1(templates + 角色内嵌 count) → v3")
 
@@ -592,6 +736,11 @@ def test_run_builtin_marks_slow_as_warning():
 def main():
     print("模板分层 / 组网图 / 诊断计划 测试\n")
     for fn in (test_migrate_v2, test_migrate_v1, test_migrate_idempotent,
+               test_counts_survive_key_normalization, test_key_normalization_end_to_end,
+               test_validate_blocks_role_without_planes,
+               test_validate_blocks_plane_without_prefix,
+               test_validate_default_template_is_clean,
+               test_validate_warns_all_zero_counts,
                test_key_collision, test_bad_plane_dropped,
                test_plane_prefixes, test_master_four_data_ips,
                test_ip_conflict_covers_all_nics, test_selection, test_plane_status_rollup,

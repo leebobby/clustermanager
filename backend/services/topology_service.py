@@ -186,6 +186,19 @@ def build(product: Dict, machine: Dict, nodes: Optional[List] = None) -> Dict:
 
     switches = _switches(roles)
 
+    # 图为什么是空的 —— 直接说出来, 不要留一张白板让人猜。
+    # 角色没勾平面就没有总线、没有连线、节点也没有 IP, 这是最常踩的一个坑。
+    problems = []
+    for role in roles:
+        if counts.get(role["key"], 0) <= 0 and not live:
+            continue
+        if not role["planes"]:
+            problems.append(f"角色「{role['label']}」在模板里没勾任何平面, 画不出连线, "
+                            f"生成的节点也不会有 IP")
+    if not groups and not problems:
+        problems.append(f"机台类型「{(machine or {}).get('name')}」各角色台数都是 0, "
+                        f"到「机台与模板」里填上台数")
+
     # 管理站接管理面 —— 它不是集群的一部分, 但不画上去就看不出运维是从哪儿进来的
     if any(s["id"] == "sw-mgmt" for s in switches):
         links.append({
@@ -205,5 +218,6 @@ def build(product: Dict, machine: Dict, nodes: Optional[List] = None) -> Dict:
         "groups": groups,
         "links": links,
         "mismatches": mismatches,
+        "problems": problems,
         "total_nodes": sum(g["count"] for g in groups),
     }

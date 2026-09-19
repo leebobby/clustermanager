@@ -118,8 +118,15 @@ def _expand(product_name: str, machine_name: str, db: Session):
 
 @router.get("")
 def list_templates() -> Dict[str, Any]:
-    """列出全部产品及其角色、机台类型"""
-    return template_service.read_templates()
+    """
+    列出全部产品及其角色、机台类型。
+
+    带上 problems/warnings —— 老文件里可能就存着"角色没配平面"这种画不出图的模板,
+    打开模板页就该看见, 不用等到发现节点没 IP 才回来查。
+    """
+    data = template_service.read_templates()
+    errors, warnings = template_service.validate(data)
+    return {**data, "problems": errors, "warnings": warnings}
 
 
 @router.get("/meta")
@@ -159,7 +166,15 @@ def save_templates(body: TemplatesSave) -> Dict[str, Any]:
                 status_code=400, detail=f"产品「{product.name}」至少要有一个角色"
             )
 
-    return template_service.write_templates(body.dict())
+    # 规整一遍再体检 —— 体检看的是"真正会存下去的样子", 不是请求里写的样子
+    normalized = template_service._normalize(body.dict())
+    errors, warnings = template_service.validate(normalized)
+    if errors:
+        # 这一类错误存下去不会报错, 但节点会没有 IP、组网图会是空的。宁可在这里挡住
+        raise HTTPException(status_code=400, detail=" ".join(errors[:3]))
+
+    saved = template_service.write_templates(body.dict())
+    return {**saved, "warnings": warnings}
 
 
 # ── 组网图 (不碰数据库) ───────────────────────────────────────────────────────
