@@ -118,6 +118,36 @@ clustermanager/
 | `PUT  /api/pxe/pxe-host/config` | 更新 PXE Host 装机配置 |
 | `GET  /api/pxe/pxe-host/iso-list` | 列出 Windows 安装目录下可用 ISO |
 
+## 一键构建成独立 App
+
+```bash
+python build_app.py                  # 自动：Windows→desktop，其他→server
+python build_app.py --mode desktop   # pywebview 原生窗口（cluster-manager.exe）
+python build_app.py --mode server    # uvicorn 控制台进程（浏览器访问）
+```
+
+一条命令走完：前端 `npm run build` → 安装依赖 → PyInstaller 打包 → 补齐
+`static/` 等运行时资源 → 产物自检（server 模式会真的把产物拉起来打一次
+`/api/nodes`）→ 压缩成发布包。
+
+| 开关 | 作用 |
+|------|------|
+| `--skip-frontend` | 复用 `backend/static/` 已有产物，不跑 npm |
+| `--skip-deps` | 跳过 pip 安装 |
+| `--no-archive` / `--no-smoke` | 不打压缩包 / 跳过自检 |
+| `--include-pxe-data` | 把本机真实 `pxe_data/` 打进包（**含 BMC 明文口令，慎用**） |
+| `--output DIR` | 压缩包输出目录 |
+
+产物：`backend/dist/cluster-manager/`（可直接运行）+
+`cluster-manager-<os>-<arch>[-server].zip|.tar.gz`，包内 `build-info.json`
+记录构建时间 / git commit / 模式，现场反馈问题时能对上版本。
+
+`build.bat` / `build.sh` 是薄封装，分别转发 `--mode desktop` / `--mode server`，
+老的调用方式不变。CI（`.github/workflows/build-app.yml`）在 windows + ubuntu 两个
+runner 上跑同一个脚本，产物挂在 Actions 的 Artifacts 里；打 `v*` tag 自动发 Release。
+
+---
+
 ## 生产部署（OpenEuler ARM → Windows 浏览器访问）
 
 > **PyInstaller 不支持跨平台编译**（无法在 Windows x86 上直接生成 Linux ARM 二进制）。  
@@ -258,6 +288,36 @@ cluster-manager-linux-arm64.tar.gz
 ---
 
 ## 变更记录
+
+### 2026-09-19 — 构建流程统一为一个跨平台脚本 + CI 自动出包
+
+**背景**：`build.bat`（Windows）和 `build.sh`（Linux）各写了一遍同样的六步流程，
+已经跑偏 —— `build.sh` 在 Linux 上用的是 pywebview 桌面 spec，产出的二进制在无图形
+环境的服务器上必然起不来；两边的资源复制清单、产物命名也不一致。
+
+| 文件 | 变更 |
+|------|------|
+| `build_app.py` | **新建**：跨平台一键构建，构建流程的唯一实现。六步：环境检查 → 前端 `npm run build` → pip 装依赖 + pyinstaller → PyInstaller 打包 → 补齐运行时资源与启动脚本 → 产物自检 + 压缩。开关 `--mode desktop\|server\|auto` / `--skip-frontend` / `--skip-deps` / `--no-archive` / `--no-smoke` / `--include-pxe-data` / `--output` |
+| `build_app.py` | **产物自检**：server 模式下把打好的二进制真的拉起来（随机空闲端口），轮询 `/api/nodes` 拿到 200 才算构建成功，启动即退出会把子进程输出打出来；自检生成的 db / 日志 / 默认配置在打包前清掉，保证分发包是干净初始状态 |
+| `build_app.py` | **默认不打包真实 `pxe_data/`**，改带 `pxe_data_example/`（`pxe_host.json` 含 BMC 明文口令，打进分发包等于把凭据发出去）；确需携带用 `--include-pxe-data`，会打警告 |
+| `build_app.py` | 包内写 `build-info.json`（构建时间 / 模式 / os / arch / python / git commit / branch / dirty），现场反馈问题能对上版本 |
+| `backend/cluster_manager.spec` | 改为**模式感知**：读环境变量 `CLUSTER_MANAGER_BUILD_MODE`（默认 desktop）。desktop → 入口 `desktop.py`、`collect_all('webview')`、`console=False`；server → 入口 `main.py`、完全不收 pywebview、`console=True`。hiddenimports 仍是单一来源，两种模式共用 |
+| `build.sh` | **改为薄封装**：转发 `build_app.py --mode server`，参数原样透传（修掉 Linux 上打出桌面版二进制的问题） |
+| `build.bat` | **改为薄封装**：转发 `build_app.py --mode desktop`，保持全 ASCII（中文 Windows 的 GBK 代码页坑）；AV 锁 dist 目录的重试逻辑挪进 `build_app.py` 的 `rmtree_retry()` |
+| `.github/workflows/build-app.yml` | **新建**：push main / PR / 打 tag / 手动触发时，在 windows-latest + ubuntu-latest 上跑同一个脚本，产物上传 Artifacts；打 `v*` tag 时 `gh release create` 自动发版 |
+| `doc/项目说明.md` | 新增「8.1 打包成独立 App」 |
+
+**为什么 desktop / server 要分两个模式**：pywebview 在 Linux 需要 GTK/WebKit2 或 Qt，
+`console=False` 又让排错只能翻日志文件。无图形环境的服务器要的是一个前台 uvicorn
+进程（journald 能收日志、systemd 能守护），和 Windows 管理站要的原生窗口是两回事。
+
+**验证**：Linux server 模式完整跑通 —— 产物自检通过；发布包解压到干净目录后
+`start.sh` 启动，`/`（200）、`/assets/index-*.js`（200）、`/api/nodes`、
+`/api/alerts/`、`/api/network/topology-graph`、`/api/templates`、`/api/templates/preview`
+（返回 21 节点）、`/docs`、SPA 兜底 `/nodes` 全部正常；包内不含 db / 日志 / 凭据 /
+pywebview。desktop 模式产物确认带上 `_internal/webview`，server 模式确认不带。
+
+---
 
 ### 2026-05-15 — 故障诊断「日志导出」改造
 

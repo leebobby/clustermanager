@@ -33,6 +33,22 @@ npm run dev    # dev server on http://localhost:3000
 npm run build  # production build
 ```
 
+## Building the app
+
+`build_app.py` at the repo root is the single build entry point (cross-platform):
+
+```bash
+python build_app.py                  # auto: Windows -> desktop, otherwise server
+python build_app.py --mode desktop   # pywebview native window (cluster-manager.exe)
+python build_app.py --mode server    # uvicorn console process (browser access)
+```
+
+It runs `npm run build`, installs deps, runs PyInstaller (`backend/cluster_manager.spec`,
+mode selected via the `CLUSTER_MANAGER_BUILD_MODE` env var), copies runtime resources
+next to the executable, smoke-tests the result in server mode, and archives it.
+`build.bat` / `build.sh` are thin wrappers around it — do not reimplement build steps
+in them.
+
 ## Backend architecture
 
 ```

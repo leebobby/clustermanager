@@ -35,10 +35,10 @@ backend/ssh_credentials.json
 # 机台型号模板 (运行时可在页面上编辑, 首次启动自动生成默认模板)
 backend/node_templates.json
 
-# ── 发布产物 ────────────────────────────────────────────────
-cluster-manager-windows.zip
+# ── 发布产物 (build_app.py 产出, 命名带 os/arch 后缀) ───────
+cluster-manager-*.zip
+cluster-manager-*.tar.gz
 cluster-manager-deploy.zip
-cluster-manager-linux-arm64.tar.gz
 *.tar.gz
 
 # ── Python 虚拟环境 ─────────────────────────────────────────
