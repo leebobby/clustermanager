@@ -408,11 +408,37 @@ def test_ping_windows_error_reply():
 
 
 def test_ping_no_command():
-    section("系统里没有 ping")
+    section("本机没有 ping 命令")
     with mock.patch.object(probe.subprocess, "run", side_effect=FileNotFoundError()):
         res = probe.ping("10.0.0.1")
     check(not res["ok"] and "没有 ping 命令" in res["detail"],
           "不抛异常, 给一句看得懂的话", res["detail"])
+    check(res.get("unavailable") is True,
+          "标成'工具不可用', 和'探到了但不通'区分开")
+
+
+def test_unavailable_is_not_a_fault():
+    section("探测工具不可用 -> 记未检查, 不记故障")
+    # 这条是在容器里截图时发现的: 本机没装 ping, 22 台机器报出 87 项"故障",
+    # 建议还是"去查网线"。真实情况是根本没查成 —— 报成故障比不报还糟。
+    items = [{
+        "id": "n1|management|ping", "kind": "builtin", "status": diag_plan.PENDING,
+        "check": "ping", "plane": "management", "host": "10.0.0.1", "target": "n1",
+        "detail": "", "suggestion": "", "latency_ms": None,
+    }]
+    with mock.patch.object(probe, "ping", return_value={
+            "ok": False, "latency_ms": None, "unavailable": True,
+            "detail": "本机没有 ping 命令(Linux 上装 iputils 即可)"}):
+        diag_plan.run_builtin(items)
+
+    check(items[0]["status"] == diag_plan.SKIP, "记未检查", items[0]["status"])
+    check("本机" in items[0]["detail"], "说清楚是本机的问题, 不是被测机的", items[0]["detail"])
+    check("网线" not in items[0]["suggestion"] and "iputils" in items[0]["suggestion"],
+          "建议是装 ping, 不是去查网线", items[0]["suggestion"])
+
+    summary = diag_plan.summarize(items)
+    check(summary["counts"][diag_plan.FAIL] == 0 and summary["unchecked"] == 1,
+          "汇总里不算故障, 算未检查", str(summary["counts"]))
 
 
 def test_probe_empty_host():
@@ -472,7 +498,8 @@ def main():
                test_topology_live_mismatch, test_topology_legacy_node_still_shows,
                test_plan_shape, test_plan_with_script, test_plan_no_ip,
                test_summary_counts_unchecked, test_sort_puts_faults_first,
-               test_ping_windows_error_reply, test_ping_no_command, test_probe_empty_host,
+               test_ping_windows_error_reply, test_ping_no_command,
+               test_unavailable_is_not_a_fault, test_probe_empty_host,
                test_run_all_isolates_failure, test_tcp_refused,
                test_run_builtin_marks_slow_as_warning):
         fn()

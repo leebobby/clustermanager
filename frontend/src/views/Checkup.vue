@@ -233,7 +233,8 @@ const planeStats = computed(() => {
     else if (i.status === 'warn') { slot.pass += 1; slot.warn += 1 }
     else if (i.status === 'fail') slot.fail += 1
   })
-  return Object.values(acc).map(p => ({
+  const ORDER = ['management', 'control', 'data_front', 'data_back']
+  return ORDER.filter(k => acc[k]).map(k => acc[k]).map(p => ({
     ...p,
     status: p.fail ? 'fail' : (p.warn ? 'warn' : (p.total ? 'pass' : 'idle')),
     text: p.fail ? `${p.fail} 台不通` : (p.warn ? `${p.warn} 台延迟偏高` : '全部正常'),

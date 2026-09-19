@@ -63,11 +63,14 @@ def ping(host: str, timeout_ms: int = 1000) -> Dict:
             timeout=max(2.0, timeout_ms / 1000.0 + 2.0), **_no_window()
         )
     except FileNotFoundError:
-        return {"ok": False, "latency_ms": None, "detail": "系统里没有 ping 命令"}
+        # 探测工具不可用 != 目标不通。标出来让上层记成"没查", 不能记成故障
+        return {"ok": False, "latency_ms": None, "unavailable": True,
+                "detail": "本机没有 ping 命令(Linux 上装 iputils 即可)"}
     except subprocess.TimeoutExpired:
         return {"ok": False, "latency_ms": None, "detail": f"超时(>{timeout_ms}ms)"}
     except OSError as exc:
-        return {"ok": False, "latency_ms": None, "detail": f"起 ping 失败: {exc}"}
+        return {"ok": False, "latency_ms": None, "unavailable": True,
+                "detail": f"本机起不了 ping: {exc}"}
 
     out = proc.stdout or b""
     # 退出码 0 还不够: Windows 收到"无法访问目标主机"的差错回包也是 0

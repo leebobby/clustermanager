@@ -197,6 +197,18 @@ def run_builtin(items: List[Dict], timeout_ms: int = 1000) -> List[Dict]:
         if res is None:
             continue
         item["latency_ms"] = res.get("latency_ms")
+
+        # 探测工具本身不可用(本机没装 ping 之类)不是被测机的故障, 我们只是没查成。
+        # 报成故障会让现场按着"查网线"的建议白忙一场, 比不报还糟。
+        if res.get("unavailable"):
+            item["status"] = SKIP
+            item["detail"] = res.get("detail") or "本机缺少探测工具, 这项没查"
+            item["suggestion"] = (
+                "这台运维机上装一下 ping(Linux: iputils / iputils-ping), 或者改在 "
+                "Windows 管理站上跑本工具 —— Windows 自带 ping.exe。"
+            )
+            continue
+
         if not res["ok"]:
             item["status"] = FAIL
             item["detail"] = res.get("detail") or "不通"

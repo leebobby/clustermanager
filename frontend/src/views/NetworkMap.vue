@@ -84,10 +84,12 @@
             <line :x1="layout.busX0" :y1="bus.y" :x2="layout.busX1" :y2="bus.y"
               :stroke="PLANE_COLOR[bus.key]" :stroke-width="PLANE_WIDTH[bus.key] + 1"
               :stroke-dasharray="bus.key === 'data_back' ? '14,8' : null" stroke-linecap="round" />
-            <rect :x="layout.busX1 - 96" :y="bus.y - 32" width="96" height="18" rx="4"
-              :fill="tint(bus.key)" />
-            <text :x="layout.busX1 - 88" :y="bus.y - 19" font-size="10.5" font-weight="600"
-              :fill="PLANE_COLOR[bus.key]" class="cm-mono">{{ bus.switch }}</text>
+            <template v-if="bus.showSwitch">
+              <rect :x="layout.busX1 - 96" :y="bus.y - 32" width="96" height="18" rx="4"
+                :fill="tint(bus.key)" />
+              <text :x="layout.busX1 - 88" :y="bus.y - 19" font-size="10.5" font-weight="600"
+                :fill="PLANE_COLOR[bus.key]" class="cm-mono">{{ bus.switch }}</text>
+            </template>
           </g>
 
           <!-- 角色分组, 挂在总线下面 -->
@@ -96,6 +98,8 @@
               :d="`M${stub.x} ${g.y} V${stub.busY}`"
               :stroke="PLANE_COLOR[stub.plane]" :stroke-width="PLANE_WIDTH[stub.plane]"
               :stroke-dasharray="stub.plane === 'data_back' ? '9,5' : null" fill="none" />
+            <circle v-for="stub in g.stubs" :key="`j-${stub.plane}`"
+              :cx="stub.x" :cy="stub.busY" r="4" :fill="PLANE_COLOR[stub.plane]" />
 
             <rect :x="g.x" :y="g.y" :width="g.w" :height="g.h" rx="11"
               :fill="UI.surface" :stroke="UI.border" stroke-width="1.5" />
@@ -111,7 +115,9 @@
                 class="chip" @click="select(chip.node)" />
             </g>
 
-            <text v-if="g.note" :x="g.x + 16" :y="g.y + g.h - 14" font-size="10.5" :fill="UI.text2">{{ g.note }}</text>
+            <text v-if="g.note" :x="g.x + 16" :y="g.y + g.h - 14" font-size="10.5" :fill="UI.text2">
+              <title>{{ g.noteFull }}</title>{{ g.note }}
+            </text>
           </g>
         </svg>
       </div>
@@ -220,17 +226,30 @@ const CHIP = 20
 const CHIP_GAP = 4
 const CHIP_PITCH = CHIP + CHIP_GAP
 
+// 10.5px 下一个汉字约 10.5px 宽, 留 32px 内边距。SVG 没有自动省略号, 只能自己截。
+const clip = (text, width) => {
+  if (!text) return ''
+  const max = Math.max(4, Math.floor((width - 32) / 10.5))
+  return text.length > max ? text.slice(0, max - 1) + '…' : text
+}
+
 const layout = computed(() => {
   const g = graph.value
   if (!g) return { width: 0, height: 0, buses: [], groups: [] }
 
-  const buses = (g.planes || []).map((p, i) => ({
-    key: p.key,
-    label: p.label,
-    sub: PLANE_SUB[p.key] || '',
-    switch: p.switch,
-    y: BUS_TOP + i * BUS_GAP,
-  }))
+  const seenSwitch = new Set()
+  const buses = (g.planes || []).map((p, i) => {
+    const showSwitch = !seenSwitch.has(p.switch)
+    seenSwitch.add(p.switch)
+    return {
+      key: p.key,
+      label: p.label,
+      sub: PLANE_SUB[p.key] || '',
+      switch: p.switch,
+      showSwitch,          // 前后段共用一台交换机, 名牌只画一次
+      y: BUS_TOP + i * BUS_GAP,
+    }
+  })
   const busY = Object.fromEntries(buses.map(b => [b.key, b.y]))
   const groupY = (buses.length ? buses[buses.length - 1].y : BUS_TOP) + GROUP_TOP_GAP
 
@@ -260,7 +279,8 @@ const layout = computed(() => {
     const box = {
       key: grp.key, label: grp.label, x, y: groupY, w, h, chips, stubs,
       sub: `${grp.count} 台${grp.planned_count && grp.count !== grp.planned_count ? ` (模板 ${grp.planned_count})` : ''}`,
-      note: grp.note,
+      note: clip(grp.note, w),
+      noteFull: grp.note,
     }
     x += w + GROUP_GAP
     return box
