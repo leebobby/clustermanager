@@ -30,6 +30,12 @@ import urllib.request
 import webbrowser
 
 
+from console import force_utf8
+
+# Windows 重定向 stdout 时会用 ANSI 代码页, 编不了中文 —— 任何 print 之前先修掉
+force_utf8()
+
+
 # ── 冻结模式下把日志重定向到文件（console=False 时仍可排查问题）─────────
 def _setup_logging():
     if getattr(sys, "frozen", False):

@@ -332,6 +332,7 @@ Edge WebView2 运行时，而 pywebview 的 `winforms._is_chromium()` 查不到�
 | `build_templates/check-webview2.bat` | **新建**：目标机上双击即可看判定结果 |
 | `build_templates/README.txt` | 新增「窗口打开了但一片空白」一节，给出三条不需要联网的路 |
 | `backend/test_desktop_probe.py` | **新建**：用假 `winreg` 覆盖 7 种注册表判定 + 4 种随包运行时情况 + 5 组版本比较 + 3 种 Chromium 查找 + 7 种兜底路径。不依赖 pytest（本仓库没有测试框架），CI 两个平台都跑 |
+| `backend/console.py` | **新建**：`force_utf8()`。Windows 上 stdout 一被重定向（管道 / `> log.txt` / CI）就退回 ANSI 代码页，英文 Windows 是 cp1252，编不了中文 —— 带中文的 `print` 直接 `UnicodeEncodeError` 崩掉。`main.py` / `desktop.py` / `test_desktop_probe.py` 都在最开始调一次。`server` 模式的 `cluster-manager.exe > log.txt` 也踩这个坑（种子数据那几句中文），一并修掉 |
 | `.github/workflows/build-app.yml` | 加两步：决策表测试（两平台）；真 Windows 上跑一次 `desktop.py --check` 打出现场探测结果 |
 | `.gitignore` | 忽略 `build_resources/`（固定版运行时约 180MB） |
 

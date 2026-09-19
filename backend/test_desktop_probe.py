@@ -19,6 +19,10 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from console import force_utf8  # noqa: E402
+
+force_utf8()
+
 # webview / uvicorn / main 导入代价大(且 Linux 上 webview 可能装不了),
 # 这里只测判定逻辑, 全部打桩
 _stub_webview = types.ModuleType("webview")

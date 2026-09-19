@@ -3,6 +3,13 @@ Cluster Manager - FastAPI 主入口
 """
 
 import os
+
+from console import force_utf8
+
+# server 模式是 console=True 的包, 但 `cluster-manager.exe > log.txt` 这种重定向
+# 下 Windows 会退回 ANSI 代码页, 种子数据那几句中文 print 就会把进程崩掉
+force_utf8()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles

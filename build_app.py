@@ -71,6 +71,9 @@ def _force_utf8_output() -> None:
     UnicodeEncodeError 崩掉。统一改成 UTF-8, 实在编不出的字符退化成转义。
 
     直接连控制台时 Python 走 WriteConsoleW, 本来就不受代码页影响, 这里改了也无害。
+
+    应用侧同样的实现在 backend/console.py。这里单独留一份, 是因为构建脚本要在
+    装依赖之前就能独立跑起来, 不依赖 backend/ 可导入。
     """
     for stream in (sys.stdout, sys.stderr):
         try:
