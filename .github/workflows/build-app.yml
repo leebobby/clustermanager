@@ -56,6 +56,12 @@ jobs:
       - name: 构建
         run: python build_app.py --mode ${{ matrix.mode }}
 
+      # 模板分层 / 组网图 / 诊断计划 —— 迁移丢台数、把没查的算成通过这类错误
+      # 只会静默变成"数据不对", 在真机上很难发现, 所以两个平台都跑
+      - name: 模板与诊断测试
+        working-directory: backend
+        run: python test_templates.py
+
       # WebView2 判定 / 浏览器兜底的决策表(假注册表, 两个平台都跑)
       - name: WebView2 判定测试
         working-directory: backend

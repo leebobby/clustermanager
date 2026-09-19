@@ -12,18 +12,46 @@ from sqlalchemy.orm import sessionmaker
 Base = declarative_base()
 
 
+class Cluster(Base):
+    """
+    集群表 —— 现场一台机台 = 一套集群。
+
+    这是「产品 → 机台类型 → 集群 → 节点」里的第三层。没有它的时候, 同一种机台
+    在现场有几台, 它们的节点就全挤在一个池子里: 连续套两次模板会排成 slave-01…24,
+    分不出哪套是哪台机台, 诊断也没法只看眼前这一套。
+
+    product / machine_type 按名字引用模板文件里的产品与机台类型(模板不入库)。
+    """
+    __tablename__ = 'clusters'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), unique=True)      # 机台编号, 如 M-2024-017
+    product = Column(String(100))
+    machine_type = Column(String(100))
+    site = Column(String(100))                   # 厂区 / 产线
+    note = Column(Text, default='')
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_diagnosed_at = Column(DateTime)
+
+
 class Node(Base):
     """节点表 - 包含三平面网络信息"""
     __tablename__ = 'nodes'
 
     id = Column(Integer, primary_key=True)
     hostname = Column(String(100), unique=True)
-    node_type = Column(String(20))  # master/slave/sensor
+    node_type = Column(String(20))  # host/master/slave/subswath/gstorage/sensor
     role = Column(String(50))
 
-    # 来源模板 — 由「按机台类型添加」写入, 供组网图与运维侧按项目/机台归类
-    project = Column(String(100))
+    # 所属集群 —— 组网图、诊断、告警都只看当前集群
+    cluster_id = Column(Integer)
+
+    # 来源模板。role_key 对应模板里 roles[].key, 是节点与角色定义之间的锚点:
+    # 组网图靠它归组, 诊断靠它知道这台机器该接哪些平面、该跑哪些专项检查。
+    # 主机名前缀改了也不受影响 —— 这正是 key 存在的理由。
+    product = Column(String(100))
     machine_type = Column(String(100))
+    role_key = Column(String(40))
 
     # 管理面 (GE口)
     mgmt_ip = Column(String(45))
@@ -221,6 +249,9 @@ class DiagScript(Base):
     #                    例: 期望出现 'active (running)', 没出现即异常
     expect_mode = Column(String(20), default='exit_code')
     expect_pattern = Column(Text, default='')
+    # 这个脚本认领模板里的哪一项角色专项检查 (rdma_link / nfs_mount / disk_usage ...)。
+    # 一键诊断按它把"该查什么"和"怎么查"对上; 留空就是普通脚本, 不参与一键诊断。
+    check_key = Column(String(40), default='')
     # 判异常时给运维看的处置建议 (一键体检报告里异常项直接展示)
     suggestion = Column(Text, default='')
 

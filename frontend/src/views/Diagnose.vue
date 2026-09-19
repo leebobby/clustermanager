@@ -370,7 +370,7 @@
             <el-table-column prop="remote" label="远端路径" width="200" show-overflow-tooltip>
               <template #default="{ row }">
                 <code v-if="row.remote" style="color:#79c0ff">{{ row.remote }}</code>
-                <span v-else style="color:#5a7090">—</span>
+                <span v-else style="color:var(--cm-text-3)">—</span>
               </template>
             </el-table-column>
             <el-table-column prop="file" label="本地落盘路径" show-overflow-tooltip />
@@ -1643,14 +1643,14 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 8px 16px;
-  background: #0d1b2e;
-  border-bottom: 1px solid #0f3460;
+  background: var(--cm-surface);
+  border-bottom: 1px solid var(--cm-surface-2);
   flex-shrink: 0;
 }
 .bar-label {
   font-size: 12px;
   font-weight: 600;
-  color: #5577aa;
+  color: var(--cm-text-3);
   letter-spacing: 0.5px;
   text-transform: uppercase;
 }
@@ -1667,8 +1667,8 @@ onMounted(() => {
 .diag-tabs { flex: 1; }
 
 .diag-tabs :deep(.el-tabs__header) {
-  background: #16213e;
-  border-bottom: 2px solid #0f3460;
+  background: var(--cm-surface);
+  border-bottom: 2px solid var(--cm-surface-2);
   margin-bottom: 0;
   padding: 0 4px;
 }
@@ -1676,19 +1676,19 @@ onMounted(() => {
   background-color: transparent;
 }
 .diag-tabs :deep(.el-tabs__item) {
-  color: #8899aa;
+  color: var(--cm-text-2);
   height: 46px;
   line-height: 46px;
   padding: 0 26px;
   font-size: 14px;
   letter-spacing: 0.3px;
 }
-.diag-tabs :deep(.el-tabs__item:hover) { color: #e94560; }
+.diag-tabs :deep(.el-tabs__item:hover) { color: var(--cm-brand); }
 .diag-tabs :deep(.el-tabs__item.is-active) {
-  color: #e94560;
+  color: var(--cm-brand);
   font-weight: 600;
 }
-.diag-tabs :deep(.el-tabs__active-bar) { background-color: #e94560; }
+.diag-tabs :deep(.el-tabs__active-bar) { background-color: var(--cm-brand); }
 .diag-tabs :deep(.el-tabs__content) {
   padding: 20px;
   background: transparent;
@@ -1713,14 +1713,14 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #fff;
+  color: var(--cm-text);
   font-size: 14px;
   font-weight: 600;
   margin-bottom: 14px;
   padding-bottom: 8px;
-  border-bottom: 2px solid #e94560;
+  border-bottom: 2px solid var(--cm-brand);
 }
-.cat-bullet { color: #e94560; font-size: 15px; }
+.cat-bullet { color: var(--cm-brand); font-size: 15px; }
 
 /* ─── 脚本卡片 ─── */
 .script-grid {
@@ -1729,7 +1729,7 @@ onMounted(() => {
   gap: 12px;
 }
 .script-card {
-  background: #0f3460;
+  background: var(--cm-surface-2);
   border: 1px solid rgba(233, 69, 96, 0.2);
   border-radius: 8px;
   padding: 14px;
@@ -1739,18 +1739,18 @@ onMounted(() => {
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 .script-card:hover {
-  border-color: #e94560;
+  border-color: var(--cm-brand);
   box-shadow: 0 4px 14px rgba(233, 69, 96, 0.18);
 }
 .script-card--disabled { opacity: 0.5; }
 .script-card--selected {
-  border-color: #67c23a;
+  border-color: var(--cm-ok);
   box-shadow: 0 0 0 1px rgba(103, 194, 58, 0.35) inset;
 }
 
 .script-card-body { flex: 1; }
-.sc-name { font-weight: 600; font-size: 14px; color: #fff; margin-bottom: 4px; }
-.sc-desc { font-size: 12px; color: #8899aa; min-height: 34px; line-height: 1.6; }
+.sc-name { font-weight: 600; font-size: 14px; color: var(--cm-text); margin-bottom: 4px; }
+.sc-desc { font-size: 12px; color: var(--cm-text-2); min-height: 34px; line-height: 1.6; }
 .sc-meta { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .sc-timeout { font-size: 11px; color: #556; }
 
@@ -1769,7 +1769,7 @@ onMounted(() => {
 /* ─── 日志采集 ─── */
 .query-card { margin-bottom: 16px; }
 .form-section-label {
-  color: #a0a0a0;
+  color: var(--cm-text-2);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.8px;
@@ -1777,7 +1777,7 @@ onMounted(() => {
   margin-bottom: 10px;
 }
 .vert-checks { display: flex; flex-direction: column; gap: 10px; }
-.vert-checks :deep(.el-checkbox__label) { color: #d0d0d0; }
+.vert-checks :deep(.el-checkbox__label) { color: var(--cm-text); }
 
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 
@@ -1797,18 +1797,18 @@ onMounted(() => {
 .run-form-block :deep(.el-form-item) { margin-bottom: 12px; }
 .run-ip-hint {
   font-size: 11px;
-  color: #8b949e;
+  color: var(--cm-text-2);
   margin-top: 4px;
 }
 .run-form-block :deep(.el-radio-button__inner) {
-  background: #0f3460;
-  border-color: #1e4080;
-  color: #8b949e;
+  background: var(--cm-surface-2);
+  border-color: var(--cm-border);
+  color: var(--cm-text-2);
 }
 .run-form-block :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
-  background: #e94560;
-  border-color: #e94560;
-  color: #fff;
+  background: var(--cm-brand);
+  border-color: var(--cm-brand);
+  color: var(--cm-text);
 }
 
 .run-action-bar {
@@ -1818,17 +1818,17 @@ onMounted(() => {
   margin-bottom: 14px;
 }
 .run-progress {
-  color: #8b949e;
+  color: var(--cm-text-2);
   font-size: 12px;
 }
 .run-id-tag {
-  color: #5a7090;
+  color: var(--cm-text-3);
   font-size: 11px;
   font-family: Consolas, monospace;
   margin-left: 4px;
 }
 .range-label {
-  color: #a0a0a0;
+  color: var(--cm-text-2);
   font-size: 13px;
   margin: 0 8px;
 }
@@ -1841,19 +1841,19 @@ onMounted(() => {
   font-size: 11px;
 }
 .run-host {
-  color: #8b949e;
+  color: var(--cm-text-2);
   font-size: 11px;
   font-family: Consolas, monospace;
   margin-left: 8px;
 }
 .run-empty-hint {
-  color: #e0a64b;
+  color: var(--cm-warn);
   font-size: 11px;
   margin-left: 8px;
 }
 .script-preview {
   background: #0d1117;
-  color: #8b949e;
+  color: var(--cm-text-2);
   border: 1px solid #30363d;
   border-radius: 6px;
   padding: 12px 14px;
@@ -1866,7 +1866,7 @@ onMounted(() => {
 }
 .run-result {
   margin-bottom: 14px;
-  border: 1px solid #0f3460;
+  border: 1px solid var(--cm-surface-2);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -1875,8 +1875,8 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 8px 14px;
-  background: #0f3460;
-  color: #fff;
+  background: var(--cm-surface-2);
+  color: var(--cm-text);
   font-weight: 500;
 }
 .run-verdict-tags { display: flex; gap: 6px; align-items: center; }
@@ -1892,14 +1892,14 @@ onMounted(() => {
 .stat-chip {
   font-size: 13px;
   color: #c9d1d9;
-  background: #0f3460;
+  background: var(--cm-surface-2);
   border-radius: 6px;
   padding: 5px 12px;
 }
 .stat-chip b { font-size: 15px; margin-left: 4px; }
-.stat-pass b { color: #67c23a; }
-.stat-fail b { color: #f56c6c; }
-.stat-error b { color: #909399; }
+.stat-pass b { color: var(--cm-ok); }
+.stat-fail b { color: var(--cm-crit); }
+.stat-error b { color: var(--cm-text-3); }
 .report-health {
   margin-left: auto;
   font-size: 13px;
@@ -1907,23 +1907,23 @@ onMounted(() => {
   padding: 5px 14px;
   border-radius: 6px;
 }
-.report-health.health-good { color: #67c23a; background: rgba(103,194,58,0.12); }
-.report-health.health-warn { color: #e6a23c; background: rgba(230,162,60,0.12); }
-.report-health.health-bad  { color: #f56c6c; background: rgba(245,108,108,0.14); }
+.report-health.health-good { color: var(--cm-ok); background: rgba(103,194,58,0.12); }
+.report-health.health-warn { color: var(--cm-warn); background: rgba(230,162,60,0.12); }
+.report-health.health-bad  { color: var(--cm-crit); background: rgba(245,108,108,0.14); }
 .report-expand { padding: 6px 12px; }
-.report-sug { color: #e0a64b; }
-.report-err { color: #ff7b7b; }
-.report-ok  { color: #67c23a; }
+.report-sug { color: var(--cm-warn); }
+.report-err { color: var(--cm-crit); }
+.report-ok  { color: var(--cm-ok); }
 :deep(.row-fail) { --el-table-tr-bg-color: rgba(245,108,108,0.08); }
 :deep(.row-error) { --el-table-tr-bg-color: rgba(144,147,153,0.08); }
 .run-suggestion {
   display: flex;
   align-items: center;
-  background: #2b1d0a;
-  color: #e0a64b;
+  background: var(--cm-warn-bg);
+  color: var(--cm-warn);
   font-size: 12px;
   padding: 8px 14px;
-  border-bottom: 1px solid #3a2a10;
+  border-bottom: 1px solid var(--cm-warn-line);
 }
 .run-stdout {
   background: #0d1117;
@@ -1937,8 +1937,8 @@ onMounted(() => {
   overflow: auto;
 }
 .run-stderr {
-  background: #1c0a0a;
-  color: #ff7b7b;
+  background: var(--cm-crit-bg);
+  color: var(--cm-crit);
   font-family: 'Consolas', monospace;
   font-size: 12px;
   margin: 0;

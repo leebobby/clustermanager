@@ -1,744 +1,377 @@
 <template>
-  <div class="network-map">
-    <!-- 控制栏 -->
-    <div class="controls-bar">
-      <div class="plane-buttons">
-        <span class="ctrl-label">平面视图：</span>
-        <el-radio-group v-model="currentPlane" @change="renderTopology">
-          <el-radio-button value="all">全部</el-radio-button>
-          <el-radio-button value="management">管理面 GE</el-radio-button>
-          <el-radio-button value="control">控制面 10GE</el-radio-button>
-          <el-radio-button value="data_front">数据面前段 DPDK</el-radio-button>
-          <el-radio-button value="data_back">数据面后段 RDMA</el-radio-button>
-        </el-radio-group>
+  <div class="netmap">
+    <header class="bar cm-card">
+      <div class="modes">
+        <button
+          type="button"
+          class="mode"
+          :class="{ 'is-on': mode === 'template' }"
+          @click="mode = 'template'"
+        >模板组网</button>
+        <button
+          type="button"
+          class="mode"
+          :class="{ 'is-on': mode === 'live' }"
+          :disabled="!current"
+          @click="mode = 'live'"
+        >叠加实况</button>
       </div>
-      <div class="legend">
-        <div v-for="item in LEGEND_LINKS" :key="item.label" class="legend-item">
-          <svg width="28" height="10">
-            <line x1="2" y1="5" x2="26" y2="5"
-              :stroke="item.color"
-              stroke-width="2"
-              :stroke-dasharray="item.dash ? '5,3' : null"
-              stroke-opacity="0.9"
-            />
-          </svg>
-          <span :style="{ color: item.color }">{{ item.label }}</span>
-        </div>
-        <div class="legend-sep"></div>
-        <div class="legend-item">
-          <span class="dot" style="background:#22c55e"></span>
-          <span>在线</span>
-        </div>
-        <div class="legend-item">
-          <span class="dot" style="background:#6b7280"></span>
-          <span>离线</span>
-        </div>
+
+      <span class="hint">
+        <template v-if="mode === 'template'">按模板画的规划图, 装机之前就能确认组网对不对</template>
+        <template v-else>把这套集群的实测状态盖在同一张图上</template>
+      </span>
+
+      <div class="spacer"></div>
+
+      <template v-if="mode === 'template'">
+        <el-select v-model="pickedProduct" placeholder="产品" size="small" style="width: 190px" @change="onProductChange">
+          <el-option v-for="p in products" :key="p.name" :label="p.name" :value="p.name" />
+        </el-select>
+        <el-select v-model="pickedMachine" placeholder="机台类型" size="small" style="width: 190px" @change="load">
+          <el-option v-for="m in machineTypes" :key="m.name" :label="m.name" :value="m.name" />
+        </el-select>
+      </template>
+      <el-button size="small" :loading="loading" @click="load">刷新</el-button>
+    </header>
+
+    <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" />
+
+    <el-alert
+      v-if="graph && graph.mismatches && graph.mismatches.length"
+      type="warning" show-icon :closable="false" title="实际台数与模板不一致"
+    >
+      <div v-for="m in graph.mismatches" :key="m" class="mismatch">{{ m }}</div>
+    </el-alert>
+
+    <section class="legend cm-card">
+      <span class="lg-title">图例</span>
+      <div v-for="p in legendPlanes" :key="p.key" class="lg-item">
+        <svg width="26" height="8" viewBox="0 0 26 8" aria-hidden="true">
+          <line x1="1" y1="4" x2="25" y2="4" :stroke="PLANE_COLOR[p.key]"
+            :stroke-width="PLANE_WIDTH[p.key]"
+            :stroke-dasharray="p.key === 'data_back' ? '6,4' : null" stroke-linecap="round" />
+        </svg>
+        <span :style="{ color: PLANE_COLOR[p.key] }">{{ p.label }}</span>
       </div>
-      <el-button size="small" :loading="loading" @click="loadAll">刷新</el-button>
-    </div>
-
-    <!-- 拓扑图 -->
-    <el-card class="topology-card" v-loading="loading">
-      <div ref="topoRef" class="topo-wrap"></div>
-    </el-card>
-
-    <!-- 详情面板 -->
-    <transition name="panel-slide">
-      <el-card v-if="selected" class="detail-panel">
-        <template #header>
-          <div class="panel-header">
-            <span>{{ selected.type === 'node' ? '节点详情' : '链路详情' }}</span>
-            <el-button size="small" @click="selected = null">✕</el-button>
-          </div>
-        </template>
-
-        <!-- 节点详情 -->
-        <template v-if="selected.type === 'node'">
-          <el-descriptions :column="1" border size="small">
-            <el-descriptions-item label="名称">{{ selected.data.name }}</el-descriptions-item>
-            <el-descriptions-item label="类型">{{ NODE_TYPE_LABEL[selected.data.type] || selected.data.type }}</el-descriptions-item>
-            <el-descriptions-item label="状态">
-              <el-tag :type="STATUS_TAG[selected.data.status] || 'info'" size="small">
-                {{ selected.data.status }}
-              </el-tag>
-            </el-descriptions-item>
-          </el-descriptions>
-          <template v-if="selected.data.planes">
-            <div class="plane-table">
-              <div class="pt-title">三平面网卡状态</div>
-              <div
-                v-for="(pdata, pname) in selected.data.planes"
-                :key="pname"
-                class="pt-row"
-              >
-                <span class="pt-plane" :style="{ color: PLANE_COLORS[pname] }">
-                  {{ PLANE_LABEL[pname] || pname }}
-                </span>
-                <span class="pt-ip">{{ pdata.ip || pdata.bmc_ip || '—' }}</span>
-                <el-tag
-                  :type="pdata.status === 'online' ? 'success' : 'danger'"
-                  size="small"
-                >{{ pdata.status || 'offline' }}</el-tag>
-                <span v-if="pdata.protocol" class="pt-proto">{{ pdata.protocol }}</span>
-              </div>
-            </div>
-          </template>
-          <!-- BMC 快速跳转 -->
-          <div v-if="getNodeBmcIp(selected.data)" class="bmc-action">
-            <div class="bmc-ip-hint">BMC: {{ getNodeBmcIp(selected.data) }}</div>
-            <el-button type="primary" size="small" @click="openBmc(selected.data)">
-              打开 BMC 管理界面
-            </el-button>
-          </div>
-        </template>
-
-        <!-- 链路详情 -->
-        <template v-else>
-          <el-descriptions :column="1" border size="small">
-            <el-descriptions-item label="平面">
-              <span :style="{ color: PLANE_COLORS[selected.data.plane] }">
-                {{ PLANE_LABEL[selected.data.plane] || selected.data.plane }}
-              </span>
-            </el-descriptions-item>
-            <el-descriptions-item label="协议">{{ selected.data.protocol }}</el-descriptions-item>
-            <el-descriptions-item label="带宽">{{ selected.data.bandwidth }}</el-descriptions-item>
-            <el-descriptions-item label="状态">
-              <el-tag :type="LINK_STATUS_TAG[selected.data.status] || 'info'" size="small">
-                {{ selected.data.status }}
-              </el-tag>
-            </el-descriptions-item>
-            <el-descriptions-item label="延迟">
-              {{ selected.data.latency != null ? selected.data.latency + ' ms' : '—' }}
-            </el-descriptions-item>
-            <el-descriptions-item label="丢包率">
-              {{ selected.data.packet_loss != null ? selected.data.packet_loss + '%' : '—' }}
-            </el-descriptions-item>
-          </el-descriptions>
-        </template>
-      </el-card>
-    </transition>
-
-    <!-- 三平面统计 -->
-    <el-card class="stats-card">
-      <template #header><span>三平面网络统计</span></template>
-      <div class="stats-grid">
-        <div
-          v-for="plane in STAT_PLANES"
-          :key="plane.key"
-          class="stat-item"
-          :style="{ borderLeftColor: plane.color }"
-        >
-          <h5 :style="{ color: plane.color }">{{ plane.label }}</h5>
-          <p>在线节点：{{ netStatus[plane.key]?.nodes_online ?? '—' }} / {{ netStatus[plane.key]?.nodes_total ?? '—' }}</p>
-          <p class="stat-desc">{{ netStatus[plane.key]?.description }}</p>
-          <el-progress
-            :percentage="pct(netStatus[plane.key]?.nodes_online, netStatus[plane.key]?.nodes_total)"
-            :color="plane.color"
-            :stroke-width="6"
-          />
-        </div>
+      <div class="lg-sep"></div>
+      <div v-for="s in LEGEND_STATUS" :key="s.key" class="lg-item">
+        <span class="lg-sq" :style="{ background: s.color }"></span>
+        <span>{{ s.label }}</span>
       </div>
-    </el-card>
+    </section>
+
+    <section class="canvas cm-card" v-loading="loading">
+      <el-empty v-if="!graph" :description="emptyText" />
+      <div v-else class="scroller">
+        <svg :width="layout.width" :height="layout.height" role="img" :aria-label="ariaLabel">
+          <!-- 管理站 -->
+          <g v-if="layout.station">
+            <rect :x="layout.station.x" :y="layout.station.y" :width="layout.station.w" height="46"
+              rx="9" :fill="UI.surface2" :stroke="UI.border" stroke-width="1.5" />
+            <text :x="layout.station.x + 16" :y="layout.station.y + 20" font-size="13" font-weight="700"
+              :fill="UI.text">{{ graph.station.label }}</text>
+            <text :x="layout.station.x + 16" :y="layout.station.y + 36" font-size="11"
+              :fill="UI.text2">{{ graph.station.note }}</text>
+            <path :d="`M${layout.station.x + 50} ${layout.station.y + 46} V${layout.buses[0].y}`"
+              :stroke="PLANE_COLOR.management" stroke-width="1.5" fill="none" />
+          </g>
+
+          <!-- 三条平面总线: 横着走, 位置固定 -->
+          <g v-for="bus in layout.buses" :key="bus.key">
+            <text :x="16" :y="bus.y + 2" font-size="13" font-weight="700" :fill="PLANE_COLOR[bus.key]">{{ bus.label }}</text>
+            <text :x="16" :y="bus.y + 19" font-size="10.5" :fill="UI.text3">{{ bus.sub }}</text>
+            <line :x1="layout.busX0" :y1="bus.y" :x2="layout.busX1" :y2="bus.y"
+              :stroke="PLANE_COLOR[bus.key]" :stroke-width="PLANE_WIDTH[bus.key] + 1"
+              :stroke-dasharray="bus.key === 'data_back' ? '14,8' : null" stroke-linecap="round" />
+            <rect :x="layout.busX1 - 96" :y="bus.y - 32" width="96" height="18" rx="4"
+              :fill="tint(bus.key)" />
+            <text :x="layout.busX1 - 88" :y="bus.y - 19" font-size="10.5" font-weight="600"
+              :fill="PLANE_COLOR[bus.key]" class="cm-mono">{{ bus.switch }}</text>
+          </g>
+
+          <!-- 角色分组, 挂在总线下面 -->
+          <g v-for="g in layout.groups" :key="g.key">
+            <path v-for="stub in g.stubs" :key="stub.plane"
+              :d="`M${stub.x} ${g.y} V${stub.busY}`"
+              :stroke="PLANE_COLOR[stub.plane]" :stroke-width="PLANE_WIDTH[stub.plane]"
+              :stroke-dasharray="stub.plane === 'data_back' ? '9,5' : null" fill="none" />
+
+            <rect :x="g.x" :y="g.y" :width="g.w" :height="g.h" rx="11"
+              :fill="UI.surface" :stroke="UI.border" stroke-width="1.5" />
+            <text :x="g.x + 16" :y="g.y + 24" font-size="14" font-weight="700" :fill="UI.text">{{ g.label }}</text>
+            <text :x="g.x + 16" :y="g.y + 42" font-size="10.5" :fill="UI.text3">{{ g.sub }}</text>
+
+            <g v-for="chip in g.chips" :key="chip.hostname">
+              <title>{{ chip.tooltip }}</title>
+              <rect :x="chip.x" :y="chip.y" width="20" height="20" rx="5"
+                :fill="chip.color"
+                :stroke="chip.focused ? UI.brand : 'none'"
+                :stroke-width="chip.focused ? 3 : 0"
+                class="chip" @click="select(chip.node)" />
+            </g>
+
+            <text v-if="g.note" :x="g.x + 16" :y="g.y + g.h - 14" font-size="10.5" :fill="UI.text2">{{ g.note }}</text>
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <!-- 节点详情 -->
+    <el-drawer v-model="drawer" :title="selected?.hostname || '节点'" size="380px">
+      <template v-if="selected">
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="角色">{{ selected.role_key }}</el-descriptions-item>
+          <el-descriptions-item label="类型">{{ selected.node_type }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <span class="cm-chip" :class="`cm-chip--${statusClass(selected.status)}`">{{ STATUS_TEXT[selected.status] || selected.status }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="管理面">{{ selected.mgmt_ip || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="控制面">{{ selected.ctrl_ip || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="数据面">
+            {{ selected.data_ip || '—' }}
+            <span v-if="selected.data_protocol"> ({{ selected.data_protocol }})</span>
+          </el-descriptions-item>
+        </el-descriptions>
+        <el-button
+          v-if="selected.mgmt_ip"
+          type="primary" class="bmc-btn" @click="openBmc(selected)"
+        >打开 BMC 管理界面</el-button>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+/*
+ * 组网图 —— 固定版式, 不是力导向。
+ *
+ * 原来用 D3 力导向: 22 个点自己弹来弹去, 每次打开位置都不一样, 台数一多就糊成
+ * 一团, 想指着说"就是这台"都指不准。改成:
+ *   三条平面总线横着走, 服务器按角色分组挂在下面, 每组用短竖线接到它该接的总线。
+ * 位置每次都一样, 台数再多也只是组里多几个方块。
+ *
+ * 版式完全由下面的 layout 算出来, 没有布局算法, 所以也不需要 D3。
+ */
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
-import * as d3 from 'd3'
+import { currentCluster } from '@/stores/cluster'
+import { planeColors, statusColors, uiColors, PLANE_WIDTH } from '@/styles/tokens'
 
-// ─── 常量 ─────────────────────────────────────────────────────
-const PLANE_COLORS = {
-  management: '#22c55e',
-  control:    '#3b82f6',
-  data_front: '#f97316',
-  data_back:  '#a855f7',
-  data:       '#f97316',
-}
-const PLANE_LABEL = {
-  management: '管理面 GE',
-  control:    '控制面 10GE',
-  data_front: '数据面前段 DPDK',
-  data_back:  '数据面后段 RDMA',
-  data:       '数据面',
-}
-const NODE_TYPE_LABEL = {
-  master:       'Master 节点',
-  slave:        'Slave 节点',
-  subswath:     'SubSwath NFS Server',
-  gstorage:     'GStorage NFS Server',
-  sensor:       '传感器阵列',
-  acquisition:  'Acquisition 采集节点',
-  mgmt_station: '管理站 (Windows)',
-  pxe_host:     'PXE Host (DHCP/TFTP/HTTP)',
-  switch:       '交换机',
-}
-const STATUS_TAG = {
-  online: 'success', normal: 'success',
-  offline: 'danger', error: 'danger',
-  warning: 'warning', degraded: 'warning',
-}
-const LINK_STATUS_TAG = { normal: 'success', degraded: 'warning', down: 'danger' }
+const route = useRoute()
+const current = currentCluster
 
-const LEGEND_LINKS = [
-  { label: '管理面 GE',        color: '#22c55e', dash: false },
-  { label: '控制面 10GE',      color: '#3b82f6', dash: false },
-  { label: '数据面 DPDK',      color: '#f97316', dash: false },
-  { label: '数据面 RDMA',      color: '#a855f7', dash: false },
-  { label: '链路断开',          color: '#6b7280', dash: true  },
+const PLANE_COLOR = planeColors()
+const UI = uiColors()
+const PLANE_SUB = {
+  management: 'BMC / 带外 / PXE',
+  control: '集群内部控制流',
+  data_front: '前段 DPDK',
+  data_back: '后段 RDMA',
+}
+const STATUS_COLOR = statusColors()
+const LEGEND_STATUS = [
+  { key: 'online', label: '在线', color: STATUS_COLOR.online },
+  { key: 'degraded', label: '异常', color: STATUS_COLOR.degraded },
+  { key: 'offline', label: '离线', color: STATUS_COLOR.offline },
+  { key: 'planned', label: '规划中', color: STATUS_COLOR.planned },
 ]
-const STAT_PLANES = [
-  { key: 'management', label: '管理面 (GE)',      color: '#22c55e' },
-  { key: 'control',    label: '控制面 (10GE)',    color: '#3b82f6' },
-  { key: 'data_front', label: '数据面前段 DPDK',  color: '#f97316' },
-  { key: 'data_back',  label: '数据面后段 RDMA',  color: '#a855f7' },
-]
+const STATUS_TEXT = { online: '在线', offline: '离线', degraded: '异常', planned: '规划中' }
 
-// 节点尺寸
-const NODE_R = { master: 32, slave: 22, subswath: 22, gstorage: 22, sensor: 24, acquisition: 22, mgmt_station: 26, pxe_host: 26, switch: 0 }
-const SW_W = 96, SW_H = 38
+const mode = ref('template')
+const loading = ref(false)
+const error = ref('')
+const graph = ref(null)
+const products = ref([])
+const pickedProduct = ref('')
+const pickedMachine = ref('')
+const drawer = ref(false)
+const selected = ref(null)
 
-// 节点内部图标文字
-const NODE_ICON = { master: 'M', slave: 'S', subswath: 'N', gstorage: 'G', sensor: 'D', acquisition: 'A', mgmt_station: '⚙', pxe_host: 'P' }
+const focusHost = computed(() => route.query.focus || '')
 
-// ─── 响应式状态 ───────────────────────────────────────────────
-const topoRef    = ref(null)
-const loading    = ref(false)
-const currentPlane = ref('all')
-const selected   = ref(null)
-const topoData   = ref({ nodes: [], links: [] })
-const netStatus  = ref({})
+const machineTypes = computed(
+  () => products.value.find(p => p.name === pickedProduct.value)?.machine_types || []
+)
+const legendPlanes = computed(() => graph.value?.planes || [])
+const emptyText = computed(() =>
+  mode.value === 'live' ? '这套集群还没有节点' : '先在「集群管理」里配好产品与机台类型'
+)
+const ariaLabel = computed(() => {
+  if (!graph.value) return '组网图'
+  const names = (graph.value.groups || []).map(g => `${g.label} ${g.count} 台`).join('、')
+  return `组网图: ${names}, 分别接入 ${(graph.value.planes || []).map(p => p.label).join('、')}`
+})
 
-// ─── 数据加载 ─────────────────────────────────────────────────
-const loadAll = async () => {
-  loading.value = true
+const tint = (plane) => ({
+  management: '#EDF1F6', control: '#F2ECFC', data_front: '#E4F2F6', data_back: '#FCE9F1',
+}[plane] || '#EDF1F6')
+
+const statusClass = (s) => ({ online: 'pass', degraded: 'warn', offline: 'fail' }[s] || 'idle')
+
+// ── 版式 ──────────────────────────────────────────────────────────────────
+const LABEL_W = 170      // 左边平面名那一栏
+const BUS_GAP = 58
+const BUS_TOP = 130
+const GROUP_TOP_GAP = 76
+const GROUP_GAP = 18
+const CHIP = 20
+const CHIP_GAP = 4
+const CHIP_PITCH = CHIP + CHIP_GAP
+
+const layout = computed(() => {
+  const g = graph.value
+  if (!g) return { width: 0, height: 0, buses: [], groups: [] }
+
+  const buses = (g.planes || []).map((p, i) => ({
+    key: p.key,
+    label: p.label,
+    sub: PLANE_SUB[p.key] || '',
+    switch: p.switch,
+    y: BUS_TOP + i * BUS_GAP,
+  }))
+  const busY = Object.fromEntries(buses.map(b => [b.key, b.y]))
+  const groupY = (buses.length ? buses[buses.length - 1].y : BUS_TOP) + GROUP_TOP_GAP
+
+  // 组宽跟着台数走, 但封顶 —— 一组 12 台也不该占满整屏
+  let x = LABEL_W
+  const groups = (g.groups || []).map(grp => {
+    const perRow = Math.min(Math.max(grp.count, 1), 7)
+    const w = Math.max(158, Math.min(260, perRow * CHIP_PITCH + 32))
+    const cols = Math.max(1, Math.floor((w - 32) / CHIP_PITCH))
+    const rows = Math.ceil(Math.max(grp.count, 1) / cols)
+    const h = 58 + rows * CHIP_PITCH + (grp.note ? 22 : 10)
+
+    const chips = (grp.nodes || []).map((n, i) => ({
+      hostname: n.hostname,
+      node: n,
+      x: x + 16 + (i % cols) * CHIP_PITCH,
+      y: groupY + 54 + Math.floor(i / cols) * CHIP_PITCH,
+      color: STATUS_COLOR[n.status] || STATUS_COLOR.planned,
+      focused: focusHost.value && n.hostname === focusHost.value,
+      tooltip: `${n.hostname}\n${STATUS_TEXT[n.status] || n.status}\n管理面 ${n.mgmt_ip || '—'}\n控制面 ${n.ctrl_ip || '—'}\n数据面 ${n.data_ip || '—'}`,
+    }))
+
+    const stubs = (grp.planes || [])
+      .filter(p => busY[p] != null)
+      .map((p, i) => ({ plane: p, x: x + 24 + i * 26, busY: busY[p] }))
+
+    const box = {
+      key: grp.key, label: grp.label, x, y: groupY, w, h, chips, stubs,
+      sub: `${grp.count} 台${grp.planned_count && grp.count !== grp.planned_count ? ` (模板 ${grp.planned_count})` : ''}`,
+      note: grp.note,
+    }
+    x += w + GROUP_GAP
+    return box
+  })
+
+  const maxH = groups.reduce((m, b) => Math.max(m, b.h), 0)
+  return {
+    buses,
+    groups,
+    busX0: LABEL_W,
+    busX1: Math.max(x - GROUP_GAP, LABEL_W + 400),
+    station: { x: LABEL_W, y: 44, w: 210 },
+    width: Math.max(x - GROUP_GAP + 20, 900),
+    height: groupY + maxH + 30,
+  }
+})
+
+// ── 取数 ──────────────────────────────────────────────────────────────────
+const loadProducts = async () => {
   try {
-    const [topo, status] = await Promise.all([
-      axios.get('/api/network/topology-graph'),
-      axios.get('/api/network/status'),
-    ])
-    topoData.value = { nodes: topo.data.nodes || [], links: topo.data.links || [] }
-    netStatus.value = status.data || {}
-    await nextTick()
-    renderTopology()
+    const { data } = await axios.get('/api/templates')
+    products.value = data.products || []
+    if (!pickedProduct.value && products.value.length) {
+      pickedProduct.value = products.value[0].name
+      pickedMachine.value = products.value[0].machine_types?.[0]?.name || ''
+    }
   } catch (e) {
-    ElMessage.error('加载拓扑数据失败：' + (e.response?.data?.detail || e.message))
+    error.value = e?.response?.data?.detail || e.message
+  }
+}
+
+const onProductChange = () => {
+  pickedMachine.value = machineTypes.value[0]?.name || ''
+  load()
+}
+
+const load = async () => {
+  loading.value = true
+  error.value = ''
+  try {
+    if (mode.value === 'live') {
+      if (!current.value) { graph.value = null; return }
+      const { data } = await axios.get(`/api/clusters/${current.value.id}/topology`)
+      graph.value = data
+    } else {
+      if (!pickedProduct.value || !pickedMachine.value) { graph.value = null; return }
+      const { data } = await axios.get('/api/templates/topology', {
+        params: { product: pickedProduct.value, machine_type: pickedMachine.value },
+      })
+      graph.value = data
+    }
+  } catch (e) {
+    graph.value = null
+    error.value = e?.response?.data?.detail || e.message || '读取组网图失败'
   } finally {
     loading.value = false
   }
 }
 
-// ─── 固定层级布局计算（5层）────────────────────────────────
-const computePositions = (nodes, W, H) => {
-  const pos = {}
-  const padX = 64
-  const usableW = W - padX * 2
-
-  // 按类型分组
-  const masters  = nodes.filter(n => n.type === 'master')
-  const slaves   = nodes.filter(n => n.type === 'slave')
-  const storages = nodes.filter(n => n.type === 'subswath' || n.type === 'gstorage')
-  const sensors  = nodes.filter(n => n.type === 'sensor')
-  const mgmtSt   = nodes.find(n => n.id === 'mgmt-station')
-  const pxeHost  = nodes.find(n => n.id === 'pxe-host')
-  const swMgmt   = nodes.find(n => n.id === 'sw-mgmt')
-  const swCtrl   = nodes.find(n => n.id === 'sw-ctrl')
-  const swData   = nodes.find(n => n.id === 'sw-data-100g')
-
-  // 5 层 Y 坐标
-  const y0 = H * 0.09   // 管理层
-  const y1 = H * 0.26   // 控制层（含传感器）
-  const y2 = H * 0.47   // 主控层（Master）
-  const y3 = H * 0.64   // 数据交换层（100G 交换机）
-  const y4 = H * 0.84   // 数据处理层（Slave + SubSwath + GStorage）
-
-  // 第 0 层（管理层）：管理站(Windows) — 管理交换机 — PXE Host
-  if (mgmtSt)  pos['mgmt-station'] = { x: padX + usableW * 0.10, y: y0 }
-  if (swMgmt)  pos['sw-mgmt']      = { x: padX + usableW * 0.45, y: y0 }
-  if (pxeHost) pos['pxe-host']     = { x: padX + usableW * 0.78, y: y0 }
-
-  // 第 1 层
-  sensors.forEach((s, i) => {
-    pos[s.id] = { x: padX + usableW * (0.05 + i * 0.11), y: y1 }
-  })
-  if (swCtrl) pos['sw-ctrl'] = { x: padX + usableW * 0.55, y: y1 }
-
-  // 第 2 层：Master 居中展开
-  const masterStep = masters.length > 1
-    ? Math.min(usableW * 0.85 / (masters.length - 1), usableW * 0.20)
-    : 0
-  const masterStartX = padX + usableW * 0.5 - masterStep * (masters.length - 1) / 2
-  masters.forEach((m, i) => {
-    pos[m.id] = { x: masterStartX + i * masterStep, y: y2 }
-  })
-
-  // 第 3 层：100G 数据交换机（居中）
-  if (swData) pos['sw-data-100g'] = { x: padX + usableW * 0.5, y: y3 }
-
-  // 第 4 层：Slaves + Storages + Acquisitions 均匀分布
-  const acqs = nodes.filter(n => n.type === 'acquisition')
-  const bottomNodes = [...slaves, ...storages, ...acqs]
-  bottomNodes.forEach((n, i) => {
-    pos[n.id] = {
-      x: padX + (i + 0.5) * (usableW / Math.max(bottomNodes.length, 1)),
-      y: y4,
-    }
-  })
-
-  return pos
+const select = (node) => {
+  selected.value = node
+  drawer.value = true
 }
 
-// ─── 辅助：节点边缘坐标（链路端点不进入节点内部） ────────────
-const edgePoint = (nodePos, targetPos, nodeType) => {
-  if (nodeType === 'switch') {
-    const hw = SW_W / 2 + 3, hh = SW_H / 2 + 3
-    const dx = targetPos.x - nodePos.x || 0.001
-    const dy = targetPos.y - nodePos.y || 0.001
-    const scaleX = hw / Math.abs(dx)
-    const scaleY = hh / Math.abs(dy)
-    const scale = Math.min(scaleX, scaleY)
-    if (scale >= 1) return nodePos
-    return { x: nodePos.x + dx * scale, y: nodePos.y + dy * scale }
+const openBmc = (node) => window.open(`https://${node.mgmt_ip}`, '_blank', 'noopener')
+
+watch(mode, load)
+watch(() => current.value?.id, () => { if (mode.value === 'live') load() })
+
+onMounted(async () => {
+  await loadProducts()
+  // 从一键诊断点「在组网图定位」过来的, 直接开实况, 否则看规划图
+  if (focusHost.value && current.value) {
+    mode.value = 'live'
+    pickedProduct.value = current.value.product
+    pickedMachine.value = current.value.machine_type
+  } else if (current.value) {
+    pickedProduct.value = current.value.product || pickedProduct.value
+    pickedMachine.value = current.value.machine_type || pickedMachine.value
   }
-  const r = (NODE_R[nodeType] || 22) + 3
-  const d = Math.hypot(targetPos.x - nodePos.x, targetPos.y - nodePos.y)
-  if (d <= r) return nodePos
-  return {
-    x: nodePos.x + (targetPos.x - nodePos.x) * r / d,
-    y: nodePos.y + (targetPos.y - nodePos.y) * r / d,
-  }
-}
-
-// ─── 辅助：贝塞尔曲线路径 ─────────────────────────────────────
-const curvePath = (src, tgt) => {
-  const dy = tgt.y - src.y
-  return [
-    `M ${src.x} ${src.y}`,
-    `C ${src.x} ${src.y + dy * 0.45},`,
-    `  ${tgt.x} ${tgt.y - dy * 0.45},`,
-    `  ${tgt.x} ${tgt.y}`,
-  ].join(' ')
-}
-
-// ─── 主渲染函数 ───────────────────────────────────────────────
-const renderTopology = () => {
-  if (!topoRef.value) return
-  const W = topoRef.value.clientWidth || 900
-  const H = 580
-
-  d3.select(topoRef.value).selectAll('*').remove()
-
-  const { nodes, links } = topoData.value
-  if (nodes.length === 0) { renderEmpty(W, H); return }
-
-  // 过滤可见链路
-  const visLinks = currentPlane.value === 'all'
-    ? links
-    : links.filter(l => l.plane === currentPlane.value)
-
-  const positions = computePositions(nodes, W, H)
-  const nodeById  = Object.fromEntries(nodes.map(n => [n.id, n]))
-
-  // ── SVG 根元素 ──────────────────────────────────────────────
-  const svg = d3.select(topoRef.value)
-    .append('svg')
-    .attr('width', W)
-    .attr('height', H)
-    .style('background', '#0f172a')
-
-  // 箭头标记（每种平面颜色 + 离线灰色各一个）
-  const defs = svg.append('defs')
-  const arrowPlanes = [...Object.keys(PLANE_COLORS), 'down']
-  arrowPlanes.forEach(key => {
-    const color = key === 'down' ? '#6b7280' : PLANE_COLORS[key]
-    defs.append('marker')
-      .attr('id', `arr-${key}`)
-      .attr('viewBox', '0 -4 8 8')
-      .attr('refX', 7).attr('refY', 0)
-      .attr('markerWidth', 5).attr('markerHeight', 5)
-      .attr('orient', 'auto')
-      .append('path')
-      .attr('d', 'M0,-4L8,0L0,4')
-      .attr('fill', color)
-  })
-
-  // zoom / pan
-  const g = svg.append('g')
-  svg.call(
-    d3.zoom()
-      .scaleExtent([0.35, 3])
-      .on('zoom', e => g.attr('transform', e.transform))
-  )
-
-  // ── 层级分隔虚线 ────────────────────────────────────────────
-  const ROWS   = [H * 0.09, H * 0.26, H * 0.47, H * 0.64, H * 0.84]
-  const RLABEL = ['管理层', '控制层', '主控层', '数据交换层', '数据处理层']
-  const bgG = g.append('g').attr('pointer-events', 'none')
-  ROWS.forEach((ry, ri) => {
-    bgG.append('line')
-      .attr('x1', 8).attr('y1', ry - 28)
-      .attr('x2', W - 8).attr('y2', ry - 28)
-      .attr('stroke', '#1e293b')
-      .attr('stroke-width', 1)
-      .attr('stroke-dasharray', '4,4')
-    bgG.append('text')
-      .attr('x', 10).attr('y', ry - 32)
-      .attr('fill', '#334155')
-      .attr('font-size', '10px')
-      .text(RLABEL[ri])
-  })
-
-  // ── 链路 ────────────────────────────────────────────────────
-  const linkG = g.append('g')
-  visLinks.forEach(link => {
-    const srcId = typeof link.source === 'object' ? link.source.id : link.source
-    const tgtId = typeof link.target === 'object' ? link.target.id : link.target
-    const srcPos  = positions[srcId]
-    const tgtPos  = positions[tgtId]
-    const srcNode = nodeById[srcId]
-    const tgtNode = nodeById[tgtId]
-    if (!srcPos || !tgtPos || !srcNode || !tgtNode) return
-
-    // 多端口并行偏移（同节点→同交换机的多条链路横向错开）
-    const portCount = link.port_count || 1
-    const portIndex = link.port_index ?? 0
-    let eSrc = srcPos, eTgt = tgtPos
-    if (portCount > 1) {
-      const dx = tgtPos.x - srcPos.x
-      const dy = tgtPos.y - srcPos.y
-      const len = Math.hypot(dx, dy) || 1
-      const perpX = -dy / len
-      const perpY =  dx / len
-      const spacing = 11
-      const offset = (portIndex - (portCount - 1) / 2) * spacing
-      eSrc = { x: srcPos.x + perpX * offset, y: srcPos.y + perpY * offset }
-      eTgt = { x: tgtPos.x + perpX * offset, y: tgtPos.y + perpY * offset }
-    }
-
-    const s = edgePoint(eSrc, eTgt, srcNode.type)
-    const t = edgePoint(eTgt, eSrc, tgtNode.type)
-
-    const isDown   = link.status === 'down'
-    const isDeg    = link.status === 'degraded'
-    const color    = isDown ? '#6b7280' : (PLANE_COLORS[link.plane] || '#94a3b8')
-    const arrowKey = isDown ? 'down' : link.plane
-    const bwWidth  = link.bandwidth === '100GE' ? 2.5 : link.bandwidth === '10GE' ? 2 : 1.5
-
-    linkG.append('path')
-      .attr('d', curvePath(s, t))
-      .attr('stroke', color)
-      .attr('stroke-width', bwWidth)
-      .attr('stroke-dasharray', isDown ? '7,5' : isDeg ? '3,3' : null)
-      .attr('stroke-opacity', isDown ? 0.4 : 0.75)
-      .attr('fill', 'none')
-      .attr('marker-end', `url(#arr-${arrowKey})`)
-      .style('cursor', 'pointer')
-      .on('click', () => { selected.value = { type: 'link', data: link } })
-
-    // 链路标注：多端口显示网卡名，单端口显示带宽
-    const midX = (s.x + t.x) / 2
-    const midY = (s.y + t.y) / 2
-    const label = link.nic || link.bandwidth
-    linkG.append('text')
-      .attr('x', midX).attr('y', midY - 4)
-      .attr('text-anchor', 'middle')
-      .attr('fill', color)
-      .attr('font-size', portCount > 1 ? '8px' : '9px')
-      .attr('pointer-events', 'none')
-      .text(label)
-  })
-
-  // ── 节点 ────────────────────────────────────────────────────
-  const nodeG = g.append('g')
-  nodes.forEach(node => {
-    const pos = positions[node.id]
-    if (!pos) return
-
-    const ng = nodeG.append('g')
-      .attr('transform', `translate(${pos.x},${pos.y})`)
-      .style('cursor', 'pointer')
-      .on('click', () => { selected.value = { type: 'node', data: node } })
-
-    const statusColor = node.status === 'online' ? '#22c55e'
-      : node.status === 'warning' || node.status === 'degraded' ? '#eab308'
-      : '#6b7280'
-
-    if (node.type === 'switch') {
-      const planeColor = PLANE_COLORS[node.switch_plane] || '#94a3b8'
-
-      // 外发光
-      ng.append('rect')
-        .attr('x', -SW_W / 2 - 4).attr('y', -SW_H / 2 - 4)
-        .attr('width', SW_W + 8).attr('height', SW_H + 8)
-        .attr('rx', 12)
-        .attr('fill', 'none')
-        .attr('stroke', planeColor)
-        .attr('stroke-width', 1)
-        .attr('stroke-opacity', 0.25)
-
-      ng.append('rect')
-        .attr('x', -SW_W / 2).attr('y', -SW_H / 2)
-        .attr('width', SW_W).attr('height', SW_H)
-        .attr('rx', 8)
-        .attr('fill', '#1e293b')
-        .attr('stroke', planeColor)
-        .attr('stroke-width', 2)
-
-      // 交换机名称分两行
-      const [line1, line2] = node.name.split(' ')
-      ng.append('text')
-        .attr('text-anchor', 'middle').attr('dy', -3)
-        .attr('fill', planeColor).attr('font-size', '10px').attr('font-weight', 'bold')
-        .attr('pointer-events', 'none')
-        .text(line1)
-      ng.append('text')
-        .attr('text-anchor', 'middle').attr('dy', 11)
-        .attr('fill', planeColor).attr('font-size', '9px').attr('opacity', 0.8)
-        .attr('pointer-events', 'none')
-        .text(line2 || '')
-
-    } else {
-      const r = NODE_R[node.type] || 22
-
-      // 在线状态光晕
-      if (node.status === 'online') {
-        ng.append('circle')
-          .attr('r', r + 6)
-          .attr('fill', 'none')
-          .attr('stroke', statusColor)
-          .attr('stroke-width', 1)
-          .attr('stroke-opacity', 0.25)
-      }
-
-      // 主圆
-      const nodeFills = {
-        master: '#1e3a5f', slave: '#1e293b',
-        subswath: '#1a2e20', gstorage: '#2e1e1a',
-        sensor: '#2d1b4e', acquisition: '#0e2a2e',
-        mgmt_station: '#1a2e1a', pxe_host: '#3a1f1f',
-      }
-      ng.append('circle')
-        .attr('r', r)
-        .attr('fill', nodeFills[node.type] || '#1e293b')
-        .attr('stroke', statusColor)
-        .attr('stroke-width', 2.5)
-
-      // 图标
-      ng.append('text')
-        .attr('text-anchor', 'middle').attr('dy', 5)
-        .attr('fill', '#e2e8f0')
-        .attr('font-size', node.type === 'master' ? '16px' : '13px')
-        .attr('font-weight', 'bold')
-        .attr('pointer-events', 'none')
-        .text(NODE_ICON[node.type] || '?')
-
-      // 节点名
-      ng.append('text')
-        .attr('text-anchor', 'middle').attr('dy', r + 16)
-        .attr('fill', '#94a3b8').attr('font-size', '11px')
-        .attr('pointer-events', 'none')
-        .text(node.name)
-
-      // 三平面状态小圆点（仅服务器节点）
-      if (node.planes) {
-        const planeKeys = Object.keys(node.planes).filter(p => PLANE_COLORS[p])
-        planeKeys.forEach((p, idx) => {
-          const angle = (idx / planeKeys.length) * Math.PI * 2 - Math.PI / 2
-          const dotR  = r - 7
-          const pStat = node.planes[p]?.status
-          const dotColor = pStat === 'online' ? PLANE_COLORS[p] : '#475569'
-          ng.append('circle')
-            .attr('cx', Math.cos(angle) * dotR)
-            .attr('cy', Math.sin(angle) * dotR)
-            .attr('r', 4.5)
-            .attr('fill', dotColor)
-            .attr('stroke', '#0f172a')
-            .attr('stroke-width', 1.5)
-            .attr('pointer-events', 'none')
-        })
-      }
-    }
-  })
-}
-
-const renderEmpty = (W, H) => {
-  const svg = d3.select(topoRef.value)
-    .append('svg')
-    .attr('width', W).attr('height', H)
-    .style('background', '#0f172a')
-  svg.append('text')
-    .attr('x', W / 2).attr('y', H / 2 - 10)
-    .attr('text-anchor', 'middle')
-    .attr('fill', '#475569').attr('font-size', '15px')
-    .text('暂无节点数据')
-}
-
-const pct = (online, total) => (!total ? 0 : Math.round((online / total) * 100))
-
-const getNodeBmcIp = (node) =>
-  node.planes?.management?.bmc_ip || node.bmc_ip || null
-
-const openBmc = (node) => {
-  const ip = getNodeBmcIp(node)
-  if (!ip) { ElMessage.warning('该节点无 BMC IP 信息'); return }
-  window.open(`https://${ip}`, '_blank')
-}
-
-onMounted(() => {
-  loadAll()
-  window.addEventListener('resize', renderTopology)
-})
-onUnmounted(() => {
-  window.removeEventListener('resize', renderTopology)
+  load()
 })
 </script>
 
 <style scoped>
-.network-map {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
+.netmap { display: flex; flex-direction: column; gap: 14px; }
+.spacer { flex-grow: 1; }
 
-/* ── 控制栏 ── */
-.controls-bar {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  flex-wrap: wrap;
-  padding: 8px 0;
+.bar { display: flex; align-items: center; gap: 12px; padding: 11px 18px; }
+.modes { display: flex; background: var(--cm-surface-2); border: 1px solid var(--cm-border); border-radius: 8px; padding: 3px; }
+.mode {
+  height: 28px; padding: 0 14px;
+  background: transparent; color: var(--cm-text-2);
+  border: 1px solid transparent; border-radius: 6px;
+  font-size: 12px; font-weight: 600; font-family: inherit; cursor: pointer;
 }
-.ctrl-label {
-  color: #94a3b8;
-  font-size: 13px;
-  white-space: nowrap;
-}
-.legend {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  margin-left: auto;
-}
-.legend-item {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: #94a3b8;
-}
-.legend-sep {
-  width: 1px;
-  height: 16px;
-  background: #334155;
-}
-.dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  display: inline-block;
-}
+.mode.is-on { background: var(--cm-surface); color: var(--cm-text); border-color: var(--cm-border); font-weight: 700; }
+.mode:disabled { opacity: .5; cursor: not-allowed; }
+.hint { font-size: 12px; color: var(--cm-text-2); }
+.mismatch { font-size: 13px; line-height: 1.8; }
 
-/* ── 拓扑容器 ── */
-.topology-card :deep(.el-card__body) {
-  padding: 0;
-}
-.topo-wrap {
-  width: 100%;
-  height: 580px;
-  overflow: hidden;
-}
+.legend { display: flex; align-items: center; gap: 22px; padding: 10px 18px; flex-wrap: wrap; }
+.lg-title { font-size: 12px; font-weight: 700; color: var(--cm-text-3); }
+.lg-item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--cm-text-2); font-weight: 600; }
+.lg-sq { width: 11px; height: 11px; border-radius: 3px; }
+.lg-sep { width: 1px; height: 18px; background: var(--cm-border-light); }
 
-/* ── 详情面板 ── */
-.detail-panel {
-  position: fixed;
-  right: 20px;
-  top: 80px;
-  width: 360px;
-  z-index: 200;
-  max-height: calc(100vh - 100px);
-  overflow-y: auto;
-}
-.panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
+.canvas { padding: 14px; min-height: 420px; }
+.scroller { overflow-x: auto; }
+.chip { cursor: pointer; }
+.chip:hover { opacity: .78; }
 
-/* 三平面状态表 */
-.plane-table {
-  margin-top: 14px;
-}
-.pt-title {
-  font-size: 12px;
-  color: #64748b;
-  margin-bottom: 8px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.pt-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  border-bottom: 1px solid #1e293b;
-  font-size: 12px;
-}
-.pt-row:last-child { border-bottom: none; }
-.pt-plane { width: 110px; font-weight: 600; }
-.pt-ip    { flex: 1; color: #cbd5e1; font-family: monospace; }
-.pt-proto { color: #f97316; font-size: 11px; }
-
-/* 动画 */
-.panel-slide-enter-active,
-.panel-slide-leave-active {
-  transition: transform 0.2s ease, opacity 0.2s ease;
-}
-.panel-slide-enter-from,
-.panel-slide-leave-to {
-  transform: translateX(30px);
-  opacity: 0;
-}
-
-/* ── 统计卡片 ── */
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-}
-.stat-item {
-  padding: 14px 16px;
-  background: #0f172a;
-  border-radius: 8px;
-  border-left: 4px solid transparent;
-}
-.stat-item h5 {
-  margin: 0 0 8px;
-  font-size: 13px;
-}
-.stat-item p {
-  margin: 4px 0;
-  font-size: 12px;
-  color: #64748b;
-}
-.stat-desc { color: #475569 !important; font-size: 11px !important; }
-
-.bmc-action {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid #1e293b;
-}
-.bmc-ip-hint {
-  font-size: 11px;
-  color: #64748b;
-  font-family: monospace;
-  margin-bottom: 8px;
-}
-
-@media (max-width: 900px) {
-  .stats-grid { grid-template-columns: repeat(2, 1fr); }
-  .detail-panel { width: calc(100vw - 40px); right: 20px; }
-}
+.bmc-btn { margin-top: 16px; width: 100%; }
 </style>

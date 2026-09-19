@@ -20,7 +20,8 @@ from sqlalchemy import text
 from config import STATIC_DIR, ISO_DIR, FIRMWARE_DIR
 from models.node import init_db, engine
 from models.seed import seed_demo_data
-from api import nodes, pxe, ipmi, network, alerts, diagnose, patrol, firmware, templates
+from api import (nodes, pxe, ipmi, network, alerts, diagnose, patrol, firmware,
+                 templates, clusters)
 
 
 def _run_migrations():
@@ -53,6 +54,22 @@ def _run_migrations():
         # 节点来源模板(项目 / 机台类型), 供组网图与运维按机台归类
         "ALTER TABLE nodes ADD COLUMN project VARCHAR(100)",
         "ALTER TABLE nodes ADD COLUMN machine_type VARCHAR(100)",
+        # v3: 产品 → 机台类型 → 集群 → 角色
+        #   cluster_id  这台机器属于哪一套集群(现场一台机台 = 一套集群)
+        #   role_key    对应模板里 roles[].key, 组网图归组与诊断项展开都靠它
+        #   product     原来叫 project, 按"产品"的说法改名; 老列留着不动, 下面搬一次数据
+        "ALTER TABLE nodes ADD COLUMN cluster_id INTEGER",
+        "ALTER TABLE nodes ADD COLUMN role_key VARCHAR(40)",
+        "ALTER TABLE nodes ADD COLUMN product VARCHAR(100)",
+        # 脚本认领模板里的哪一项角色专项检查, 一键诊断据此把"该查什么"和"怎么查"对上
+        "ALTER TABLE diag_scripts ADD COLUMN check_key VARCHAR(40) DEFAULT ''",
+    ]
+    # 加完列再搬数据。只填空值, 所以重复执行安全, 也不会盖掉用户后来改过的内容。
+    backfills = [
+        "UPDATE nodes SET product = project "
+        "WHERE (product IS NULL OR product = '') AND project IS NOT NULL",
+        "UPDATE nodes SET role_key = node_type "
+        "WHERE (role_key IS NULL OR role_key = '') AND node_type IS NOT NULL",
     ]
     with engine.connect() as conn:
         for sql in migrations:
@@ -61,6 +78,12 @@ def _run_migrations():
                 conn.commit()
             except Exception:
                 pass  # 列已存在则忽略
+        for sql in backfills:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception:
+                pass  # 老库连 project 列都没有之类, 忽略
 
     # 确保 nodes.json 存储目录存在，并预生成默认配置
     from services.pxe_service import pxe_service_v2
@@ -100,7 +123,8 @@ app.include_router(alerts.router,  prefix="/api/alerts",  tags=["告警管理"])
 app.include_router(diagnose.router,prefix="/api/diagnose",tags=["故障诊断"])
 app.include_router(patrol.router,  prefix="/api/patrol",  tags=["巡检管理"])
 app.include_router(firmware.router,prefix="/api/firmware",tags=["固件仓库"])
-app.include_router(templates.router,prefix="/api/templates",tags=["机台型号模板"])
+app.include_router(templates.router,prefix="/api/templates",tags=["机台模板"])
+app.include_router(clusters.router, prefix="/api/clusters", tags=["集群与一键诊断"])
 
 
 @app.get("/api/health")
@@ -140,10 +164,22 @@ if os.path.isdir(STATIC_DIR):
     # FastAPI 的 redirect_slashes, 把 GET /api/nodes 这种无尾斜杠的请求
     # 直接兜底成 HTML, 前端 axios 拿到 HTML 解析失败 → 节点表永远是空
     from fastapi import HTTPException as _HTTPException
+    _STATIC_ROOT = os.path.abspath(STATIC_DIR)
+
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
         if full_path.startswith(("api/", "iso/", "firmware/")):
             raise _HTTPException(status_code=404)
+
+        # public/ 里的根级静态资源(logo.svg 等)先按真实文件返回。只挂 /assets 的话
+        # 它们会被下面的 SPA 兜底成 index.html, 浏览器拿到一坨 HTML 当图片 ——
+        # 侧栏的 <img src="/logo.svg"> 在开发模式下好好的, 打包后就是个空图。
+        if full_path:
+            candidate = os.path.normpath(os.path.join(_STATIC_ROOT, full_path))
+            # normpath 之后再比前缀, 挡掉 ../ 穿越
+            if candidate.startswith(_STATIC_ROOT + os.sep) and os.path.isfile(candidate):
+                return FileResponse(candidate)
+
         index = os.path.join(STATIC_DIR, "index.html")
         return FileResponse(index)
 

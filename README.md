@@ -25,6 +25,32 @@
 | SubSwath | 2 | subswath-01~02 | 172.16.3.170~171 | NFS Server（4×7.68T NVMe RAID10），100G×2 |
 | GStorage | 1 | gstorage-01 | 172.16.3.172 | NFS Server（机械盘硬件 RAID50），100G×1 |
 
+## 产品 → 机台类型 → 集群 → 角色
+
+数据模型分四层。前两层是**模板**，存在 `backend/node_templates.json` 这个文件里，不入库；
+后两层是**实例**，存数据库。
+
+```
+产品 (product)            例: X6 量测机
+ └─ 角色定义 × N           Host / Master / Slave / SubSwath / GlobalStorage
+ │   └─ 主机名前缀、接哪几个平面、网段与起始序号、硬件规格、角色专项检查
+ └─ 机台类型 (machine_type)  例: 标准型 / 精简型 —— 只定各角色几台，其余全部沿用产品级定义
+        │
+        ↓  实例化（填一个机台编号）
+集群 (cluster)            例: M-2024-017 @ fab3      ← 现场一台机台 = 一套集群
+ └─ 节点 × N               由模板一次排出来，每台带 cluster_id
+```
+
+几个要点：
+
+- **角色用 `key` 标识**（`host` / `master` / …），机台类型的台数按 key 索引。key 定下就别改，
+  主机名前缀可以随便改而不会串台
+- **`planes` 声明角色接哪几个平面** —— 组网图和诊断项都从这里推导。这是"模板能快速生成
+  组网图"成立的前提
+- **集群这一层不能省**：同一种机台在现场有很多台，没有 `cluster_id` 的话它们的节点会全挤在
+  一个池子里，连开两套就排成 slave-01…24，分不出哪套是哪台机台
+- 老模板文件（`templates` / `projects` 两种历史格式）启动时自动迁移，不用手改 JSON
+
 ## 功能模块
 
 ### 1. PXE 自动化部署（v2）
@@ -36,19 +62,33 @@
 - **分批部署**：第一批（SubSwath+GStorage）→ 第二批（Master）→ 第三批（Slave）— PXE Host 装机就绪后开始
 - **node-env API**：`GET /api/pxe/node-env?mac=<MAC>` 供 firstboot detect.sh 获取差异化配置
 
-### 2. 集群管理
+### 2. 一键诊断（落地页）
 
-- 三平面网络状态监控
+选好当前集群，点一次按钮，出一份体检报告：
+
+- **检查项由组网图推导** —— 模板里写着每个角色接哪几个平面，就查哪几项，不用手工维护检查清单
+- **内建项当场实测** —— ping / BMC / SSH 从本机直接探，几秒出结果，不需要登录被测机
+- **结果按严重度排** —— 要动手的永远在最上面，每条带对象、结论和一句能照做的建议
+- **没查的项如实标出来** —— 没有脚本认领的角色专项记「未检查」并说明原因，不会算成通过
+
+### 3. 集群管理
+
+- 产品 / 机台类型模板维护（见下）
+- 集群实例：一台机台 = 一套集群，建立时按模板把节点一次排好
+- 节点清单与手工补漏
 - BMC/IPMI 远程管理（ipmitool / Redfish）
-- 定时巡检任务
-- 告警规则引擎
 
-### 3. 故障诊断
+### 4. 组网图
 
-- 三平面拓扑可视化（D3.js）
-- 日志收集与分析
-- 故障点定位
-- 诊断脚本库（业务诊断 + 硬件诊断）
+- **固定版式**：三条平面总线横着走，服务器按角色分组挂在下面。位置每次都一样，台数再多也只是组里多几个方块
+- **模板组网**：只选产品 + 机台类型就能画出来，不需要先有真节点、不需要先扫网
+- **叠加实况**：把某套集群的实测状态盖在同一张图上，台数和模板对不上会直接标出来
+
+### 5. 告警与日志
+
+- 日志收集与分析、故障点定位
+- 诊断脚本库（业务诊断 + 硬件诊断 + 日志导出）
+- 脚本可以「认领」模板里的某项角色专项检查，认领后就会参与一键诊断
 
 ## 快速启动
 
@@ -77,27 +117,67 @@ npm run dev   # http://localhost:3000
 clustermanager/
 ├── backend/
 │   ├── api/
+│   │   ├── clusters.py     # 集群 CRUD + 组网图 + 一键诊断
+│   │   ├── templates.py    # 产品 / 机台类型模板 + 从模板画组网图
 │   │   ├── pxe.py          # PXE 部署 API（v2）
 │   │   ├── ipmi.py         # BMC/IPMI 管理
 │   │   ├── nodes.py        # 节点 CRUD
 │   │   ├── network.py      # 网络拓扑
 │   │   ├── alerts.py       # 告警
-│   │   ├── diagnose.py     # 故障诊断
+│   │   ├── diagnose.py     # 诊断脚本 / 日志导出
 │   │   └── patrol.py       # 巡检
 │   ├── services/
-│   │   └── pxe_service.py  # PXE 服务 v2（nodes.json / DHCP / GRUB 生成）
+│   │   ├── template_service.py   # 产品 → 机台类型 → 角色，含历史格式迁移
+│   │   ├── topology_service.py   # 组网图（模板直出 / 叠加实况）
+│   │   ├── diag_plan.py          # 检查计划由组网图推导
+│   │   ├── probe.py              # 真 ping / TCP 探测
+│   │   └── pxe_service.py        # PXE 服务 v2（nodes.json / DHCP / GRUB 生成）
 │   ├── models/
-│   │   ├── node.py         # ORM 模型
+│   │   ├── node.py         # ORM 模型（Cluster / Node / DiagScript ...）
 │   │   └── seed.py         # 演示数据
-│   ├── pxe_data/
-│   │   └── nodes.json      # 节点配置清单（自动生成，需填入实际 MAC）
+│   ├── node_templates.json # 模板文件（运行时生成，不入库也不入 git）
+│   ├── app.ico             # 应用图标（tools/make_icon.py 生成）
+│   ├── test_templates.py   # 模板分层 / 组网图 / 诊断计划 测试
 │   └── main.py             # 入口 + 迁移
+├── tools/
+│   └── make_icon.py        # 图标生成（纯标准库）
 └── frontend/src/
+    ├── styles/theme.css    # 全部颜色的单一出处
+    ├── stores/cluster.js   # 当前集群（全站唯一共享状态）
     └── views/
-        └── PXEDeploy.vue   # PXE 部署页面（5 标签页）
+        ├── Checkup.vue     # 一键诊断（落地页）
+        ├── NetworkMap.vue  # 组网图（固定版式）
+        ├── Clusters.vue    # 集群管理 + 模板编辑
+        ├── Diagnose.vue    # 告警与日志
+        └── PXEDeploy.vue   # PXE 部署页面（5 标签页，暂未挂路由）
 ```
 
 ## API 速查
+
+### 集群与一键诊断
+
+| 接口 | 说明 |
+|------|------|
+| `GET  /api/clusters` | 集群列表（带节点数、上次诊断时间） |
+| `POST /api/clusters` | 建一套集群，默认同时按模板把节点排出来 |
+| `DELETE /api/clusters/{id}` | 删集群；`?with_nodes=true` 才连节点一起删 |
+| `GET  /api/clusters/{id}/nodes` | 这套集群的节点 |
+| `GET  /api/clusters/{id}/topology` | 实况组网图（真节点叠在模板版式上） |
+| `GET  /api/clusters/{id}/diagnose/plan` | 只出检查计划，不实际探测 |
+| `POST /api/clusters/{id}/diagnose` | 跑一次一键诊断（内建项当场并发实测） |
+
+### 模板
+
+| 接口 | 说明 |
+|------|------|
+| `GET  /api/templates` | 全部产品、角色、机台类型 |
+| `PUT  /api/templates` | 整份覆盖保存 |
+| `GET  /api/templates/meta` | 平面与检查项的可选值（前端渲染编辑器用） |
+| `GET  /api/templates/topology?product=&machine_type=` | **只按模板画组网图，不碰数据库** |
+| `GET  /api/templates/preview?product=&machine_type=` | 预览将创建的节点，不写库 |
+| `POST /api/templates/apply` | 按模板批量创建节点（可挂到已有集群） |
+
+### PXE
 
 | 接口 | 说明 |
 |------|------|
@@ -323,6 +403,70 @@ cluster-manager-linux-arm64.tar.gz
 ---
 
 ## 变更记录
+
+### 2026-09-19 — 图标 / 配色 / 界面改简 / 模板分层
+
+四件事一起做的，互相牵连：配色要按"故障必须一眼看出来"定，界面要按"一键诊断"排，
+组网图的画法取决于模型怎么分层。
+
+#### 图标
+
+以前没有图标，exe 顶的是 PyInstaller 默认图。方案 A「三平面」：蓝底三条白横杠
+（管理面 / 控制面 / 数据面）+ 右下角绿色健康徽章。
+
+| 文件 | 说明 |
+|------|------|
+| `tools/make_icon.py` | 纯标准库光栅化（4×4 超采样 + 圆角矩形/圆的 SDF），不引入 Pillow。产物已入库，平时不用跑 |
+| `backend/app.ico`、`frontend/public/favicon.ico` | 16/24/32/48/64/128/256 七个尺寸。≤64 用 32 位 BMP（兼容性最好），128/256 用 PNG（否则单个 256 帧就 256KB）。**不给小尺寸的话 Windows 会拿 256 硬缩，任务栏上很糊** |
+| `backend/cluster_manager.spec` | `icon=` 接上 `app.ico` |
+| `backend/main.py` | SPA 兜底之前先按真实文件返回 `static/` 根目录下的资源。只挂 `/assets` 的话 `/logo.svg` 会被兜底成 index.html，侧栏图标在开发模式下好好的、**打包后是个空图**。`normpath` 之后比前缀挡 `../` 穿越 |
+
+#### 配色
+
+换掉深底 + 洋红（`#1a1a2e` / `#e94560`），理由不是审美：
+
+1. **洋红是红的**，而它被用作"侧栏选中""标题"。在一个判故障的工具里红色只能有一个意思
+2. Element Plus 组件本身是浅色的，深底要靠一大摞 `:deep()` 逐个改深 —— 观感不统一正是从
+   那儿来的
+
+| 文件 | 变更 |
+|------|------|
+| `frontend/src/styles/theme.css` | 全部颜色的单一出处。三组互不串用：**界面基础色**（骨架，无含义）、**状态色**（绿/琥珀/红/灰，表达健康度的唯一通道）、**三平面色**（石板灰/紫/青/玫红，四个都避开红黄绿，只画在组网图连线上）。警告用琥珀 `#A9600A` 不是纯黄——纯黄在白底上根本看不清。所有文字色实测对比度 ≥ 4.5:1 |
+| 同上 | token 同时灌进 Element Plus 自己的 CSS 变量（含 `light-3/5/7/8/9` 派生色，少给的话按钮 hover 会跳回 EP 默认蓝），组件自动跟随 |
+| `frontend/src/views/*.vue` | 54 处硬编码色换成 token。`Diagnose.vue` 的日志控制台**故意保持深色** —— 那是终端输出，深底本来就是对的，也不参与状态语义 |
+
+#### 界面改简
+
+侧栏 5 项 → 4 项，**一键诊断**成为落地页。
+
+| 变更 | 说明 |
+|------|------|
+| 新增 `views/Checkup.vue` | 一屏之内：大结论（N 项故障 / N 项警告 / N 项通过）→ 四平面概览 → 检查结果按严重度排。每条故障带对象、结论和一句**能照做的**建议，外加「在组网图定位」 |
+| 「仪表盘」并入一键诊断 | 现场要的是"这台机台有没有问题"，不是一屏看板 |
+| 「节点管理」并入「集群管理」 | 节点本来就是集群的一部分。`Nodes.vue` 删除，节点的增删改搬进 `Clusters.vue`（它原来还带着一套旧格式的模板编辑器，留着会对着新 API 直接报错） |
+| 「故障诊断」改叫「告警与日志」 | 那套脚本维护是给配脚本的人用的，不是现场每天点的东西 |
+| `App.vue` 顶部常驻**当前集群**选择器 | 全站都只看选中的这一套。选择记在 localStorage —— 现场是同一台笔记本对着同一台机台干活 |
+| `stores/cluster.js` | 全站唯一的共享状态，一个 reactive 对象，没有引入 Pinia |
+
+#### 模板分层
+
+原来只有两层（项目 / 机台类型），缺的是**集群**这一层。
+
+| 文件 | 变更 |
+|------|------|
+| `backend/services/template_service.py` | 重写为 产品 → 机台类型。角色改用独立的 `key` 标识（原来拿 `hostname_prefix` 当标识，**改个前缀台数就丢了**）；补上 `Host` 角色（原来 Host 是从 PXE 配置单独读的，画组网图时是个特例）；角色新增 `planes` 声明接哪几个平面、`checks` 声明角色专项检查 |
+| 同上 | `_migrate()` 就地升级三种历史格式。从 `projects` 迁时 `counts` 是按 hostname_prefix 索引的，**必须跟着改成按 key 索引**，否则台数全变 0，而界面上只会显示"这个机台类型 0 台"，不报错 |
+| `backend/models/node.py` | 新增 `clusters` 表；`nodes` 加 `cluster_id` / `role_key` / `product`；`diag_scripts` 加 `check_key` |
+| `backend/main.py` | 迁移列 + 回填（`project`→`product`、`node_type`→`role_key`）。只填空值，重复执行安全 |
+| `backend/services/topology_service.py` | 组网图。**只给产品和机台类型就能画整张图**，不碰数据库、不需要先有真节点；给了 nodes 就把实测状态叠上去，台数对不上直接标出来。连线是"角色→交换机"这一级并带台数 —— 22 台连出来的 66 根线在屏幕上只会糊成一片 |
+| `backend/services/probe.py` | **真探测**。在这之前 `network_service.check_connectivity` 和 `api/network.check_node_network` 返回的都是写死的模拟值（真 ping 那行被注释掉了），一键诊断建在模拟值上报出来的"正常"就是假的。Windows 上两个坑都处理了：`ping.exe` 收到"无法访问目标主机"的差错回包时**退出码也是 0**（所以退出码和 `TTL=` 两个条件都要满足）；冻结后起子进程会闪黑框（`CREATE_NO_WINDOW`） |
+| `backend/services/diag_plan.py` | 检查计划由组网图推导。**没有脚本认领的项如实标成"未检查"并说明原因，不会算成通过** —— 一份把没查的项算成通过的体检报告比没有报告更糟。通了但慢记警告不记故障 |
+| `backend/api/clusters.py` | 集群 CRUD + `/topology` + `/diagnose`。删集群默认**不删节点**（节点变成无归属），要删得明着传 `with_nodes` |
+| `backend/api/templates.py` | 改成产品口径，新增 `GET /topology`（不碰数据库）和 `GET /meta`（平面与检查项的可选值，前端拿它渲染编辑器） |
+| `backend/api/nodes.py` | `project` → `product`，补 `cluster_id` / `role_key`。不改的话 `Node(**node.dict())` 会直接抛 TypeError |
+| `frontend/src/views/NetworkMap.vue` | 重写成固定版式，**不再用 D3 力导向** —— 22 个点自己弹来弹去，每次打开位置都不一样，想指着说"就是这台"都指不准。d3 依赖一并移除 |
+| `backend/test_templates.py` | 60+ 条断言。重点盯三件在真机上很难发现、出错了只会静默变成"数据不对"的事：迁移丢台数、跳号后主机名与 IP 失去对齐、把没查的算成通过。Windows ping 差错回包那条只能靠假 `subprocess` 顶上来，Linux 上永远复现不了 |
+
 
 ### 2026-09-19 — 修复 Win10 上「窗口打开但一片白」
 

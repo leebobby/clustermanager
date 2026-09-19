@@ -1,0 +1,172 @@
+/*
+ * 配色 —— 单一出处。
+ *
+ * 三组颜色, 互不串用:
+ *   界面基础色  页面骨架, 不带任何状态含义
+ *   状态色      表达健康度的唯一通道。除此之外界面任何地方不出现红黄绿
+ *   三平面色    只画在组网图的连线和平面标签上, 四个色都刻意避开红黄绿
+ *
+ * 上一版用的是深底 + 洋红强调色(#e94560)。换掉不是为了好看:
+ *   1. 洋红是红的, 而它被拿去表示"侧栏选中""标题"。在一个判故障的工具里
+ *      红色只能有一个意思, 这是硬冲突
+ *   2. Element Plus 组件本身是浅色的, 深底要靠一大摞 :deep() 逐个改深 ——
+ *      观感不统一正是从那儿来的。浅底之后那些覆盖全部删掉
+ *
+ * 所有文字色都验过对比度 >= 4.5:1(注释里标了实测值)。
+ */
+
+:root {
+  /* ── 界面基础色 ── */
+  --cm-bg: #F4F6F9;           /* 页面底 */
+  --cm-surface: #FFFFFF;      /* 卡片 / 侧栏 */
+  --cm-surface-2: #EDF1F6;    /* 表头 / 次级底 */
+  --cm-surface-3: #E3E9F0;    /* 更深一档, 用于选中条纹 */
+  --cm-border: #D8DFE8;
+  --cm-border-light: #E8EDF3;
+
+  --cm-text: #17202E;         /* 主文字        15.0:1 */
+  --cm-text-2: #5B6675;       /* 次文字         5.9:1 */
+  --cm-text-3: #6E7A8A;       /* 弱文字 / 单位   4.6:1 */
+
+  --cm-brand: #2457D6;        /* 交互色: 可点、选中  6.2:1 */
+  --cm-brand-hover: #1C46B0;
+  --cm-brand-tint: #EAF0FF;   /* 主色淡底 */
+  --cm-brand-line: #B9CCF5;   /* 主色淡描边 */
+
+  /* ── 状态色 ── */
+  --cm-ok: #157F3D;           /* 通过   5.1:1 */
+  --cm-ok-bg: #E6F4EA;
+  --cm-ok-line: #BFE3CB;
+
+  --cm-warn: #A9600A;         /* 警告   4.8:1 —— 琥珀不是纯黄, 纯黄在白底看不清 */
+  --cm-warn-bg: #FDF3E3;
+  --cm-warn-line: #F0D9AE;
+
+  --cm-crit: #B4231A;         /* 故障   6.6:1 —— 整个界面只有故障是红的 */
+  --cm-crit-bg: #FCEBE9;
+  --cm-crit-line: #F2C4BF;
+
+  --cm-idle: #64748B;         /* 未检 / 离线  4.8:1 —— 没数据就是灰的, 不拿绿色冒充正常 */
+  --cm-idle-bg: #EDF1F6;
+  --cm-idle-line: #D8DFE8;
+
+  /* ── 三平面色 ── */
+  /* 线宽本身就是带宽提示: GE 细, 10GE 中, 100GE 粗; 后段再加虚线, 红绿色盲也分得开 */
+  --cm-plane-management: #5A6B7F;
+  --cm-plane-control: #6D28D9;
+  --cm-plane-data_front: #0E7490;
+  --cm-plane-data_back: #BE185D;
+
+  --cm-radius: 10px;
+  --cm-radius-sm: 7px;
+  --cm-shadow: 0 1px 2px rgba(23, 32, 46, .05);
+
+  --cm-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
+             "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --cm-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
+
+  /* ── Element Plus ──
+   * 把 token 灌进 EP 自己的变量, 组件就跟着走了, 不用再逐个 :deep() 改。
+   * light-N 是 EP 用来做 hover / 禁用 / 淡底的派生色, 必须一起给, 否则
+   * 按钮 hover 还会跳回它默认的那个蓝。 */
+  --el-color-primary: var(--cm-brand);
+  --el-color-primary-light-3: #4F7AE0;
+  --el-color-primary-light-5: #7C9CE9;
+  --el-color-primary-light-7: #A9BDF1;
+  --el-color-primary-light-8: #C4D2F5;
+  --el-color-primary-light-9: var(--cm-brand-tint);
+  --el-color-primary-dark-2: var(--cm-brand-hover);
+
+  --el-color-success: var(--cm-ok);
+  --el-color-success-light-9: var(--cm-ok-bg);
+  --el-color-warning: var(--cm-warn);
+  --el-color-warning-light-9: var(--cm-warn-bg);
+  --el-color-danger: var(--cm-crit);
+  --el-color-danger-light-9: var(--cm-crit-bg);
+  --el-color-error: var(--cm-crit);
+  --el-color-error-light-9: var(--cm-crit-bg);
+  --el-color-info: var(--cm-idle);
+  --el-color-info-light-9: var(--cm-idle-bg);
+
+  --el-bg-color: var(--cm-surface);
+  --el-bg-color-page: var(--cm-bg);
+  --el-bg-color-overlay: var(--cm-surface);
+
+  --el-text-color-primary: var(--cm-text);
+  --el-text-color-regular: var(--cm-text-2);
+  --el-text-color-secondary: var(--cm-text-3);
+  --el-text-color-placeholder: #93A0AF;
+
+  --el-border-color: var(--cm-border);
+  --el-border-color-light: var(--cm-border-light);
+  --el-border-color-lighter: var(--cm-border-light);
+  --el-border-color-extra-light: var(--cm-border-light);
+
+  --el-fill-color: var(--cm-surface-2);
+  --el-fill-color-light: var(--cm-surface-2);
+  --el-fill-color-lighter: #F2F5F9;
+  --el-fill-color-blank: var(--cm-surface);
+
+  --el-border-radius-base: var(--cm-radius-sm);
+  --el-font-family: var(--cm-font);
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--cm-font);
+  background: var(--cm-bg);
+  color: var(--cm-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 状态徽标 ──
+ * 全站统一, 各页不要再自己拼状态色。cm-chip 是文字胶囊, cm-dot 是列表前的圆点。*/
+
+.cm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.cm-chip--pass { color: var(--cm-ok);   background: var(--cm-ok-bg);   border-color: var(--cm-ok-line); }
+.cm-chip--warn { color: var(--cm-warn); background: var(--cm-warn-bg); border-color: var(--cm-warn-line); }
+.cm-chip--fail { color: var(--cm-crit); background: var(--cm-crit-bg); border-color: var(--cm-crit-line); }
+.cm-chip--idle { color: var(--cm-idle); background: var(--cm-idle-bg); border-color: var(--cm-idle-line); }
+.cm-chip--brand { color: var(--cm-brand); background: var(--cm-brand-tint); border-color: var(--cm-brand-line); }
+
+.cm-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.cm-dot--pass { background: var(--cm-ok); }
+.cm-dot--warn { background: var(--cm-warn); }
+.cm-dot--fail { background: var(--cm-crit); }
+.cm-dot--idle { background: var(--cm-idle); }
+
+.cm-mono { font-family: var(--cm-mono); }
+
+.cm-card {
+  background: var(--cm-surface);
+  border: 1px solid var(--cm-border);
+  border-radius: var(--cm-radius);
+  box-shadow: var(--cm-shadow);
+}
+
+/* 滚动条: 默认的在浅底上太抢眼 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #C7D0DB; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #AEBAC8; }
+::-webkit-scrollbar-track { background: transparent; }

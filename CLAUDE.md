@@ -65,24 +65,73 @@ backend/
 ├── run.py           # Convenience launcher
 ├── config.py        # Paths / runtime config
 ├── models/          # SQLAlchemy ORM models
-├── api/             # Route handlers: nodes, network, alerts, diagnose, ipmi, patrol, pxe, firmware
-└── services/        # Business logic: ipmi_service, network_service, pxe_service, redfish_service,
+├── api/             # Route handlers: clusters, templates, nodes, network, alerts, diagnose,
+│                    #   ipmi, patrol, pxe, firmware
+└── services/        # Business logic: template_service, topology_service, diag_plan, probe,
+                     #   ipmi_service, network_service, pxe_service, redfish_service,
                      #   diag_service, cred_service
 ```
+
+### Product → machine type → cluster → role
+
+The data model has four levels. The first two live in `backend/node_templates.json`
+(a file, never the DB); the last two live in SQLite.
+
+- **Product** (`products[]`) defines the roles a product's clusters are built from:
+  hostname prefix, which network planes each role attaches to, subnet prefixes,
+  IP start offsets, hardware specs, and which per-role checks apply.
+- **Machine type** (`machine_types[]`) only says how many of each role. Everything else
+  is inherited from the product.
+- **Cluster** (`clusters` table) is one physical machine in the field. Creating one expands
+  the template into nodes, each stamped with `cluster_id`.
+- **Role** is identified by `roles[].key` (`host` / `master` / `slave` / `subswath` /
+  `gstorage`), mirrored onto `nodes.role_key`. The key is the anchor between a node and its
+  role definition — **never** derive role identity from the hostname prefix, which users
+  are free to rename.
+
+`template_service._migrate()` upgrades three historical formats in place (`templates` →
+`projects` → `products`). When migrating from `projects`, `machine_types[].counts` are keyed
+by hostname prefix and must be re-keyed to `roles[].key`, or every count silently becomes 0.
+
+`topology_service.build()` draws the whole network map from a template alone — no DB, no
+live nodes needed. Passing `nodes` overlays real status on the same fixed layout.
+
+`diag_plan.build_plan()` derives the check list from that topology. Checks with no script
+claiming them are reported as `skip` with a reason, never folded into "pass".
+
+`services/probe.py` does the real reachability probing (`network_service.check_connectivity`
+and `api/network.check_node_network` still return simulated values — do not build on them).
 
 ## Frontend architecture
 
 ```
 frontend/src/
 ├── main.js          # App entry, Element Plus setup
-├── App.vue          # Root layout with sidebar navigation
+├── App.vue          # Root layout: 4-item sidebar + persistent cluster picker
 ├── router/          # Vue Router config
-└── views/           # Page components: Dashboard, NetworkMap, Nodes, PXEDeploy,
-                     #   Alerts, Patrol, Diagnose
+├── stores/          # cluster.js — the one piece of shared state (current cluster)
+├── styles/          # theme.css — all colors, as CSS variables
+└── views/           # Checkup (一键诊断, landing), NetworkMap, Clusters, Diagnose
+                     #   (告警与日志), Alerts; unrouted: Dashboard, PXEDeploy, Patrol
 ```
 
-`NetworkMap.vue` renders a D3.js three-plane topology graph. The backend API base URL is
-configured per-view via Axios (proxied through Vite in dev mode).
+`NetworkMap.vue` uses a **fixed layout**, not a force-directed graph: three horizontal plane
+buses with role groups hanging beneath them. Positions are identical on every open, and node
+count only changes how many chips are in a group. D3 is no longer a dependency.
+
+### Colors
+
+Every color comes from `src/styles/theme.css` — do not hardcode hex values in a view.
+Three sets, which must not be mixed:
+
+- **Base** (`--cm-bg`, `--cm-surface`, `--cm-text`, `--cm-brand`) — page chrome, no meaning.
+- **Status** (`--cm-ok` / `--cm-warn` / `--cm-crit` / `--cm-idle`) — the *only* channel for
+  health. Red appears nowhere else in the UI; that was the reason for dropping the old
+  `#e94560` accent, which meant both "selected" and "fault".
+- **Plane** (`--cm-plane-*`) — topology lines only; all four deliberately avoid red/amber/green.
+
+The theme also feeds Element Plus's own CSS variables, so components follow without
+`:deep()` overrides. The log console in `Diagnose.vue` stays dark on purpose.
 
 ## Runtime data / secrets
 

@@ -18,8 +18,10 @@ class NodeCreate(BaseModel):
     hostname: str
     node_type: str  # master/slave/subswath/gstorage/sensor
     role: Optional[str] = None
-    project: Optional[str] = None
+    cluster_id: Optional[int] = None
+    product: Optional[str] = None
     machine_type: Optional[str] = None
+    role_key: Optional[str] = None
     mgmt_ip: Optional[str] = None
     mgmt_mac: Optional[str] = None
     bmc_ip: Optional[str] = None
@@ -39,8 +41,10 @@ class NodeUpdate(BaseModel):
     hostname: Optional[str] = None
     node_type: Optional[str] = None
     role: Optional[str] = None
-    project: Optional[str] = None
+    cluster_id: Optional[int] = None
+    product: Optional[str] = None
     machine_type: Optional[str] = None
+    role_key: Optional[str] = None
     mgmt_ip: Optional[str] = None
     mgmt_mac: Optional[str] = None
     bmc_ip: Optional[str] = None
@@ -64,9 +68,11 @@ class NodeResponse(BaseModel):
     hostname: str
     node_type: str
     role: Optional[str]
-    # 来源模板
-    project: Optional[str] = None
+    # 所属集群 + 来源模板
+    cluster_id: Optional[int] = None
+    product: Optional[str] = None
     machine_type: Optional[str] = None
+    role_key: Optional[str] = None
     # 管理面
     mgmt_ip: Optional[str]
     mgmt_mac: Optional[str]
@@ -110,14 +116,17 @@ class NodeNetworkUpdate(BaseModel):
 def get_nodes(
     node_type: Optional[str] = None,
     status: Optional[str] = None,
+    cluster_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
-    """获取节点列表，可按类型和状态筛选"""
+    """获取节点列表，可按类型、状态、所属集群筛选"""
     query = db.query(Node)
     if node_type:
         query = query.filter(Node.node_type == node_type)
     if status:
         query = query.filter(Node.status == status)
+    if cluster_id is not None:
+        query = query.filter(Node.cluster_id == cluster_id)
     return query.all()
 
 

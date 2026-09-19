@@ -143,7 +143,10 @@ exe = EXE(
     target_arch=None,                 # 跟随构建主机 (Windows x64)
     codesign_identity=None,
     entitlements_file=None,
-    # icon='app.ico',                 # 如需自定义图标取消注释并提供 app.ico
+    # 方案 A「三平面」。app.ico 由 tools/make_icon.py 生成并入库, 含 16~256 共 7 个
+    # 尺寸 —— 任务栏和标题栏取的是 16/32, 不给小尺寸 Windows 会拿 256 硬缩, 很糊。
+    icon=os.path.join(SPECPATH, 'app.ico') if os.path.exists(
+        os.path.join(SPECPATH, 'app.ico')) else None,
 )
 
 # onedir 模式: dist/cluster-manager/

@@ -215,7 +215,7 @@ onMounted(() => {
 .stat-box {
   text-align: center;
   padding: 15px;
-  background: #0f3460;
+  background: var(--cm-surface-2);
   border-radius: 8px;
 }
 
@@ -225,15 +225,15 @@ onMounted(() => {
 }
 
 .stat-box .label {
-  color: #a0a0a0;
+  color: var(--cm-text-2);
   font-size: 12px;
 }
 
-.stat-box.critical .value { color: #f56c6c; }
-.stat-box.warning .value { color: #e6a23c; }
-.stat-box.info .value { color: #909399; }
-.stat-box.active .value { color: #409eff; }
-.stat-box.resolved .value { color: #67c23a; }
+.stat-box.critical .value { color: var(--cm-crit); }
+.stat-box.warning .value { color: var(--cm-warn); }
+.stat-box.info .value { color: var(--cm-text-3); }
+.stat-box.active .value { color: var(--cm-brand); }
+.stat-box.resolved .value { color: var(--cm-ok); }
 
 .plane-stats {
   margin-top: 20px;
