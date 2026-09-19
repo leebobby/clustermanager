@@ -9,6 +9,7 @@ winreg 把注册表状态喂进去, 把六种判定和四种兜底路径全过�
     cd backend && python test_desktop_probe.py
 """
 
+import contextlib
 import ntpath
 import os
 import sys
@@ -35,6 +36,9 @@ if "main" not in sys.modules:
     sys.modules["main"] = _stub_main
 
 import desktop  # noqa: E402
+
+# 真 winreg(Linux 上是 None)。测试会临时把它换成假的, 每次都必须还原成这个对象。
+_ORIGINAL_WINREG = sys.modules.get("winreg")
 
 RUNTIME_GUID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 RUNTIME_KEY = rf"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{RUNTIME_GUID}"
@@ -79,10 +83,30 @@ def fake_winreg(keys: dict) -> types.ModuleType:
     return mod
 
 
+@contextlib.contextmanager
+def fake_registry(keys: dict):
+    """
+    临时把 winreg 换成假的, 退出时必须还原。
+
+    不还原的后果(在 Windows 上才会暴露, Linux 跑不出来): platform.platform()
+    内部会调真正的 winreg.OpenKeyEx 去读系统版本, 拿到我们这个假模块就
+    AttributeError —— _check_report() 第一行就炸。
+    """
+    original = sys.modules.get("winreg")
+    sys.modules["winreg"] = fake_winreg(keys)
+    try:
+        with mock.patch.object(os, "name", "nt"):
+            yield
+    finally:
+        if original is None:
+            sys.modules.pop("winreg", None)
+        else:
+            sys.modules["winreg"] = original
+
+
 def probe_with(keys: dict, bundled: str = "") -> dict:
     with mock.patch.object(desktop, "BUNDLED_WEBVIEW2_DIR", bundled or "/nonexistent"), \
-         mock.patch.object(os, "name", "nt"):
-        sys.modules["winreg"] = fake_winreg(keys)
+         fake_registry(keys):
         return desktop.probe_webview2()
 
 
@@ -149,24 +173,21 @@ def test_find_chromium() -> None:
         edge = f.name
 
     try:
-        with mock.patch.object(os, "name", "nt"):
-            sys.modules["winreg"] = fake_winreg({APP_PATHS_EDGE: {None: f'"{edge}"'}})
+        with fake_registry({APP_PATHS_EDGE: {None: f'"{edge}"'}}):
             got = desktop._find_chromium()
         check(got == edge, "App Paths 命中(顺带剥掉两侧引号)", got)
 
-        with mock.patch.object(os, "name", "nt"):
-            sys.modules["winreg"] = fake_winreg({APP_PATHS_EDGE: {None: r"C:\gone\msedge.exe"}})
+        with fake_registry({APP_PATHS_EDGE: {None: r"C:\gone\msedge.exe"}}):
             got = desktop._find_chromium()
         check(got == "", "注册表有值但文件不在 -> 视为未找到", repr(got))
 
         # 标准安装路径这一支拼的是 Windows 路径, 在 Linux 上 os.path.join 拼不出
         # 真实文件, 所以换成 ntpath 语义, 断言它构造出的候选路径正确
         expect = ntpath.join(r"C:\Program Files (x86)", desktop._CHROMIUM_HINTS[0])
-        with mock.patch.object(os, "name", "nt"), \
+        with fake_registry({}), \
              mock.patch.dict(os.environ, {"ProgramFiles(x86)": r"C:\Program Files (x86)"}), \
              mock.patch.object(os.path, "join", ntpath.join), \
              mock.patch.object(os.path, "isfile", lambda p: p == expect):
-            sys.modules["winreg"] = fake_winreg({})
             got = desktop._find_chromium()
         check(got == expect, "注册表全空 -> 退到标准安装路径", got)
     finally:
@@ -208,6 +229,10 @@ def test_browser_fallback() -> None:
 
 def test_check_report() -> None:
     print("\n=== --check 诊断报告 ===")
+    # 这一步必须在真 winreg 下跑: 报告里有 platform.platform(), 它内部要读注册表。
+    # CI 的 Windows 任务就是在这儿炸的 —— 前面的假 winreg 没被还原
+    check(sys.modules.get("winreg") is _ORIGINAL_WINREG,
+          "假 winreg 已还原(否则 platform.platform() 会拿到假模块而炸)")
     try:
         report = desktop._check_report()
         check("判定" in report and "WebView2" in report,
