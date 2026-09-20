@@ -11,6 +11,8 @@
             </span>
             <div class="spacer"></div>
             <el-button size="small" type="primary" plain :disabled="!ready" @click="openNode()">加节点</el-button>
+            <el-button size="small" :disabled="!ready" @click="openImport">导入 nodes.json</el-button>
+            <el-button size="small" :disabled="!ready || !nodes.length" @click="exportNodes">导出</el-button>
             <el-button size="small" :loading="reloading" :disabled="!ready" @click="reload">重新加载</el-button>
           </header>
 
@@ -290,6 +292,89 @@
       </el-tab-pane>
     </el-tabs>
 
+    <!-- ── 导入 nodes.json ──────────────────────────────────────── -->
+    <el-dialog v-model="importOpen" title="导入 nodes.json" width="860px" top="6vh">
+      <p class="imp-hint">
+        模板排出来的是"该长什么样", nodes.json 是现场"实际是什么样"。两边对不上时以文件为准 ——
+        比如 Master 前段第二个口, 模板按等差数列算的和现场手配的常常不是一个。
+        <br />
+        认 PXE 那份按 MAC 索引的格式(<code>hostname_new / ctrl_ip / dpdk_ips / rdma_ips / bmc_ip</code>),
+        IP 带不带掩码都行。先给预览, 确认了才写库。
+      </p>
+
+      <div class="imp-pick">
+        <input ref="fileInput" type="file" accept=".json,application/json" @change="onPick" />
+        <span v-if="importFile" class="imp-file cm-mono">{{ importFile.name }}</span>
+        <el-button v-if="importFile" link type="primary" size="small" :loading="importing"
+          @click="preview">重新解析</el-button>
+      </div>
+
+      <el-alert v-if="importError" :title="importError" type="error" show-icon :closable="false" />
+
+      <template v-if="importPreview">
+        <div class="imp-sum">
+          <span class="cm-chip cm-chip--brand">新增 {{ importPreview.summary.create }}</span>
+          <span class="cm-chip cm-chip--warn">更新 {{ importPreview.summary.update }}</span>
+          <span class="cm-chip cm-chip--idle">不变 {{ importPreview.summary.unchanged }}</span>
+          <span v-if="importPreview.summary.missing" class="cm-chip cm-chip--idle">
+            模板里有而文件里没有 {{ importPreview.summary.missing }}
+          </span>
+        </div>
+
+        <el-alert
+          v-if="importPreview.problems && importPreview.problems.length"
+          type="warning" show-icon :closable="false" title="这些没认出来, 不会导入"
+        >
+          <div v-for="m in importPreview.problems" :key="m" class="issue">{{ m }}</div>
+        </el-alert>
+
+        <el-table :data="importPreview.items" size="small" max-height="360" border>
+          <el-table-column label="动作" width="72">
+            <template #default="{ row }">
+              <span class="cm-chip cm-chip--tiny" :class="ACTION_CLASS[row.action]">
+                {{ ACTION_TEXT[row.action] }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="主机名" width="120">
+            <template #default="{ row }"><span class="cm-mono bold">{{ row.hostname }}</span></template>
+          </el-table-column>
+          <el-table-column prop="role_label" label="角色" width="100" />
+          <el-table-column v-for="pk in PLANE_KEYS" :key="pk" :label="SHORT_PLANE[pk]" min-width="140">
+            <template #default="{ row }">
+              <div v-if="(row.plane_ips || {})[pk]" class="ip-cell">
+                <span v-for="ip in row.plane_ips[pk]" :key="ip" class="cm-mono ip"
+                  :style="{ color: PLANE_COLOR[pk] }">{{ ip }}</span>
+                <span v-if="row.changed_planes.includes(pk)" class="imp-changed">改</span>
+              </div>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <!-- 逐条的提醒放表格下面: 塞进表格里那一列会被挤到横向滚动之外, 等于没写 -->
+        <div v-if="importNotes.length" class="imp-notes">
+          <div v-for="n in importNotes" :key="n.key" class="imp-note">
+            <span class="cm-mono bold">{{ n.hostname }}</span> {{ n.text }}
+          </div>
+        </div>
+
+        <div v-if="importPreview.missing.length" class="imp-missing">
+          <el-checkbox v-model="removeMissing">
+            把文件里没有的那 {{ importPreview.missing.length }} 台模板节点删掉
+          </el-checkbox>
+          <span class="muted">{{ importPreview.missing.slice(0, 6).join('、') }}{{
+            importPreview.missing.length > 6 ? ' …' : '' }}</span>
+        </div>
+      </template>
+
+      <template #footer>
+        <el-button @click="importOpen = false">取消</el-button>
+        <el-button type="primary" :disabled="!importPreview" :loading="importing"
+          @click="doImport">确认导入</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="nodeOpen" :title="nodeForm.id ? '编辑节点' : '加节点'" width="560px">
       <el-form label-width="96px">
         <el-form-item label="主机名"><el-input v-model="nodeForm.hostname" placeholder="如 slave-13" /></el-form-item>
@@ -362,6 +447,27 @@ const expanded = ref([])
 const nodeOpen = ref(false)
 const savingNode = ref(false)
 const nodeForm = ref({})
+
+const importOpen = ref(false)
+const importing = ref(false)
+const importFile = ref(null)
+const importPreview = ref(null)
+const importError = ref('')
+const removeMissing = ref(false)
+const fileInput = ref(null)
+
+const importNotes = computed(() => {
+  const out = []
+  ;(importPreview.value?.items || []).forEach(it => {
+    (it.notes || []).forEach(text => out.push({ key: `${it.hostname}|${text}`, hostname: it.hostname, text }))
+  })
+  return out
+})
+
+const ACTION_TEXT = { create: '新增', update: '更新', unchanged: '不变' }
+const ACTION_CLASS = {
+  create: 'cm-chip--brand', update: 'cm-chip--warn', unchanged: 'cm-chip--idle',
+}
 
 const currentRoles = computed(() => saved.value.find(p => p.name === ws.product)?.roles || [])
 
@@ -660,6 +766,81 @@ const saveNode = async () => {
   }
 }
 
+// ── 导入 / 导出 nodes.json ──────────────────────────────────────────────────
+
+const openImport = () => {
+  importFile.value = null
+  importPreview.value = null
+  importError.value = ''
+  removeMissing.value = false
+  importOpen.value = true
+  if (fileInput.value) fileInput.value.value = ''
+}
+
+const onPick = (e) => {
+  importFile.value = e.target.files?.[0] || null
+  importPreview.value = null
+  importError.value = ''
+  if (importFile.value) preview()
+}
+
+/** 先只看会改什么 —— 一条都不写库 */
+const preview = async () => {
+  if (!importFile.value) return
+  importing.value = true
+  importError.value = ''
+  try {
+    const form = new FormData()
+    form.append('file', importFile.value)
+    const { data } = await axios.post('/api/workspace/nodes/import?dry_run=true', form)
+    importPreview.value = data
+  } catch (e) {
+    importPreview.value = null
+    importError.value = e?.response?.data?.detail || e.message || '解析失败'
+  } finally {
+    importing.value = false
+  }
+}
+
+const doImport = async () => {
+  if (!importFile.value) return
+  importing.value = true
+  importError.value = ''
+  try {
+    const form = new FormData()
+    form.append('file', importFile.value)
+    const { data } = await axios.post(
+      `/api/workspace/nodes/import?dry_run=false&remove_missing=${removeMissing.value}`, form)
+    const a = data.applied || {}
+    const bits = []
+    if (a.created?.length) bits.push(`新增 ${a.created.length}`)
+    if (a.updated?.length) bits.push(`更新 ${a.updated.length}`)
+    if (a.removed?.length) bits.push(`删除 ${a.removed.length}`)
+    importOpen.value = false
+    await Promise.all([loadNodes(), loadWorkspace({ force: true })])
+    ElMessage.success(bits.length ? `已导入: ${bits.join(' · ')}` : '文件和现在的节点一致, 没有改动')
+  } catch (e) {
+    importError.value = e?.response?.data?.detail || e.message || '导入失败'
+  } finally {
+    importing.value = false
+  }
+}
+
+const exportNodes = async () => {
+  try {
+    const { data } = await axios.get('/api/workspace/nodes/export')
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `nodes-${ws.machineType || 'export'}.json`.replace(/[\\/:*?"<>|\s]+/g, '_')
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || e.message || '导出失败')
+  }
+}
+
 const removeNode = async (row) => {
   try {
     await ElMessageBox.confirm(
@@ -707,6 +888,56 @@ onMounted(() => {
 }
 
 .issue { font-size: 12.5px; line-height: 1.8; }
+
+.imp-hint {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.9;
+  color: var(--cm-text-2);
+}
+.imp-hint code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--cm-surface-2);
+  font-family: var(--cm-mono);
+  font-size: 11.5px;
+}
+.imp-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.imp-file { font-size: 12px; color: var(--cm-text-2); }
+.imp-sum {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0;
+}
+.imp-changed {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--cm-warn-bg);
+  color: var(--cm-warn);
+  font-size: 10px;
+  font-weight: 700;
+}
+.imp-notes {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--cm-warn-line);
+  border-radius: var(--cm-radius-sm);
+  background: var(--cm-warn-bg);
+}
+.imp-note { font-size: 12px; line-height: 1.85; color: var(--cm-warn); }
+.imp-missing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 12px;
+}
 
 .nic-list { width: 100%; }
 .nic-line {

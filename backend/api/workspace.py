@@ -11,12 +11,13 @@ GET /diagnose/options 列出这次能勾什么, POST /diagnose 带上勾选结�
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from models.node import DiagScript, Node, get_db
-from services import diag_plan, template_service, topology_service, workspace_service
+from services import (diag_plan, nodes_import, template_service, topology_service,
+                      workspace_service)
 
 router = APIRouter()
 
@@ -152,6 +153,55 @@ def list_nodes(db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
         "os_version": n.os_version, "cpu_cores": n.cpu_cores,
         "memory_gb": n.memory_gb, "disk_gb": n.disk_gb,
     } for n in workspace_service.current_nodes(db, product, machine)]
+
+
+# ── 导入 / 导出 nodes.json ────────────────────────────────────────────────────
+
+@router.post("/nodes/import")
+async def import_nodes(
+    file: UploadFile = File(..., description="现场那份 nodes.json"),
+    dry_run: bool = Query(True, description="true = 只看会改什么, 不写库"),
+    remove_missing: bool = Query(False, description="把文件里没有的模板节点一并删掉"),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    导入 nodes.json —— 模板排出来的是"该长什么样", 这份文件是现场"实际是什么样"。
+
+    默认只预览: 哪几台新增、哪几台改了哪个平面、哪几台模板里有而文件里没有。
+    确认之后再带 dry_run=false 传一次才写库。实测状态不会被这一步抹掉。
+    """
+    product, machine = _current()
+    try:
+        data = nodes_import.load_bytes(await file.read())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    rows, problems = nodes_import.parse(data)
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail="这份文件里没认出任何节点" + (f": {problems[0]}" if problems else ""))
+
+    existing = workspace_service.current_nodes(db, product, machine)
+    preview = nodes_import.plan(rows, product, machine, existing)
+    preview["problems"] = problems
+    preview["filename"] = file.filename
+    preview["dry_run"] = dry_run
+    if dry_run:
+        return preview
+
+    result = nodes_import.apply(db, preview, product, machine, remove_missing=remove_missing)
+    preview["applied"] = result
+    preview["node_count"] = len(workspace_service.current_nodes(db, product, machine))
+    return preview
+
+
+@router.get("/nodes/export")
+def export_nodes(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """当前机台的节点导出成同一种 nodes.json —— 导出改几行再导回来"""
+    product, machine = _current()
+    nodes = workspace_service.current_nodes(db, product, machine)
+    return nodes_import.export(nodes, product, machine)
 
 
 # ── 组网图 ────────────────────────────────────────────────────────────────────

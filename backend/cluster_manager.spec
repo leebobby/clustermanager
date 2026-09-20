@@ -94,6 +94,10 @@ a = Analysis(
         # paramiko (SSH 远程执行: 诊断脚本 / 自定义脚本 / 日志收集)
         'paramiko',
         'paramiko.transport',
+        # 文件上传 (导入 nodes.json / 上传固件)。FastAPI 是在函数里 try-import 它的,
+        # PyInstaller 静态扫不出来 —— 不写在这儿, 打包后一上传就 500
+        'python_multipart',
+        'python_multipart.multipart',
         # FastAPI 应用模块 (确保被冻结)
         'main',
         # 标准库

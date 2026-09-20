@@ -820,6 +820,175 @@ def test_node_create_ignores_unknown_columns():
 
 
 
+# ── 6. 导入 nodes.json ────────────────────────────────────────────────────────
+
+_FIELD_JSON = {
+    "_comment": "现场那份 nodes.json 的样子",
+    "_role_master": "======== Master ========",
+    "aa:bb:cc:11:00:01": {
+        "hostname_new": "master-01", "role": "master",
+        "ctrl_nic": "eno1", "ctrl_ip": "172.16.3.11/24", "ctrl_gw": "172.16.3.1",
+        "dpdk_nics": "eno2 eno3", "dpdk_ips": "200.1.1.11/24 200.1.2.31/24",
+        "rdma_nics": "eno4 eno5", "rdma_ips": "100.1.1.11/24 100.1.2.31/24",
+        "bmc_ip": "172.16.0.11", "system_disk": "/dev/sda",
+    },
+    "aa:bb:cc:22:00:01": {
+        "hostname_new": "slave-01", "role": "slave",
+        "ctrl_ip": "172.16.3.51/24", "rdma_ips": "100.1.1.51/24", "bmc_ip": "172.16.0.51",
+    },
+}
+
+
+def test_import_reads_field_format():
+    section("认 PXE 那份按 MAC 索引的 nodes.json")
+
+    from services import nodes_import
+
+    rows, problems = nodes_import.parse(_FIELD_JSON)
+    check(len(rows) == 2, "两台都认出来了(下划线开头的注释键跳过)", f"{len(rows)} 台")
+    check(not problems, "没有认不出来的", str(problems))
+
+    m = rows[0]
+    check(m["hostname"] == "master-01", "hostname_new 当主机名", m["hostname"])
+    check(m["mac"] == "aa:bb:cc:11:00:01", "顶层的 MAC 收下来当管理口 MAC", m["mac"])
+    # 掩码要去掉 —— 本工具只拿地址探连通性
+    check(m["plane_ips"]["control"] == ["172.16.3.11"], "控制面去掉了 /24",
+          str(m["plane_ips"]["control"]))
+    # 这条是导入存在的理由: 现场第二个口是 .31, 模板按等差数列算出来的是 .11
+    check(m["plane_ips"]["data_front"] == ["200.1.1.11", "200.1.2.31"],
+          "dpdk_ips 的两个口都进了 data_front", str(m["plane_ips"]["data_front"]))
+    check(m["plane_ips"]["data_back"] == ["100.1.1.11", "100.1.2.31"],
+          "rdma_ips 的两个口都进了 data_back", str(m["plane_ips"]["data_back"]))
+    check(m["plane_ips"]["management"] == ["172.16.0.11"], "bmc_ip 归到管理面",
+          str(m["plane_ips"]["management"]))
+
+
+def test_import_tolerates_field_shapes():
+    section("现场文件是手改的, 几种写法都得认")
+
+    from services import nodes_import
+
+    # 顶层是数组
+    rows, _ = nodes_import.parse([{"hostname": "n1", "mgmt_ip": "10.0.0.1"}])
+    check(len(rows) == 1 and rows[0]["plane_ips"]["management"] == ["10.0.0.1"],
+          "顶层数组 + mgmt_ip 别名", str(rows and rows[0]["plane_ips"]))
+
+    # {"nodes": [...]}
+    rows, _ = nodes_import.parse({"nodes": [{"name": "n2", "bmc_ip": "10.0.0.2"}]})
+    check(len(rows) == 1 and rows[0]["hostname"] == "n2", "{'nodes': [...]} 也认")
+
+    # 顶层按主机名索引
+    rows, _ = nodes_import.parse({"n3": {"bmc_ip": "10.0.0.3"}})
+    check(len(rows) == 1 and rows[0]["hostname"] == "n3",
+          "顶层键不是 MAC 时, 它自己就是主机名", str(rows and rows[0]["hostname"]))
+
+    # 逗号分隔 + 数组 + 我们自己导出的 plane_ips
+    rows, _ = nodes_import.parse({"n4": {"bmc_ip": "10.0.0.4", "rdma_ips": "1.1.1.1, 2.2.2.2"}})
+    check(rows[0]["plane_ips"]["data_back"] == ["1.1.1.1", "2.2.2.2"], "逗号分隔也认")
+    rows, _ = nodes_import.parse({"n5": {"plane_ips": {"control": ["3.3.3.3"]}}})
+    check(rows[0]["plane_ips"]["control"] == ["3.3.3.3"], "自己导出的 plane_ips 能原样导回")
+
+
+def test_import_reports_instead_of_dropping():
+    section("认不出来的要报出来, 不能静默丢掉")
+
+    from services import nodes_import
+
+    rows, problems = nodes_import.parse({
+        "n1": {"bmc_ip": "10.0.0.1", "rdma_ips": "100.1.1.1 这不是IP"},
+        "n2": {"role": "slave"},                       # 一个 IP 都没有
+        "n3": "不是个对象",
+        "n4": {"ctrl_ip": "10.0.1.4"},                 # 没有管理面
+    })
+    names = {r["hostname"] for r in rows}
+    check(names == {"n1", "n4"}, "没有 IP 的跳过, 其余留下", str(sorted(names)))
+    check(any("这不是IP" in n for n in rows[0]["notes"]),
+          "坏地址单独报出来, 好的那个照样收", str(rows[0]["notes"]))
+    check(rows[0]["plane_ips"]["data_back"] == ["100.1.1.1"], "好地址保留")
+    check(any("n2" in p for p in problems), "没 IP 的那台报上去", str(problems))
+    check(any("n3" in p for p in problems), "值不是对象的也报上去", str(problems))
+    check(any("管理面" in n for n in rows[1]["notes"]),
+          "缺管理面 IP 要提醒 —— 管理面不参与诊断了", str(rows[1]["notes"]))
+
+
+def test_import_matches_roles():
+    section("文件里的 role 对上模板里的角色")
+
+    from services import nodes_import
+
+    product = ts._normalize(ts._DEFAULT_TEMPLATES)["products"][0]
+    check(nodes_import.match_role(product, "master", "master-01")["key"] == "master",
+          "按 key 认")
+    check(nodes_import.match_role(product, "GlobalStorage", "x")["key"] == "gstorage",
+          "按显示名认, 不分大小写")
+    # role 字段缺失 / 写错时, 拿主机名前缀兜底
+    check(nodes_import.match_role(product, "", "subswath-02")["key"] == "subswath",
+          "没写 role 时按主机名前缀兜底")
+    check(nodes_import.match_role(product, "没这个角色", "zzz-01") is None,
+          "真认不上就是 None —— 让预览里说出来, 而不是硬塞给某个角色")
+
+
+def test_import_plan_and_export_roundtrip():
+    section("预览算得准; 导出的能再导回来")
+
+    from services import nodes_import
+
+    product = ts._normalize(ts._DEFAULT_TEMPLATES)["products"][0]
+    machine = product["machine_types"][0]
+
+    existing = [_FakeNode(hostname="master-01", role_key="master",
+                          plane_ips={"management": ["172.16.0.11"],
+                                     "control": ["172.16.3.11"],
+                                     "data_front": ["200.1.1.11", "200.1.2.11"],
+                                     "data_back": ["100.1.1.11", "100.1.2.11"]}),
+                _FakeNode(hostname="slave-01", role_key="slave",
+                          plane_ips={"management": ["172.16.0.51"],
+                                     "control": ["172.16.3.51"],
+                                     "data_back": ["100.1.1.51"]})]
+    rows, _ = nodes_import.parse(_FIELD_JSON)
+    preview = nodes_import.plan(rows, product, machine, existing)
+
+    by_name = {x["hostname"]: x for x in preview["items"]}
+    check(by_name["master-01"]["action"] == "update", "第二个口不一样 → 更新",
+          by_name["master-01"]["action"])
+    check(by_name["master-01"]["changed_planes"] == ["data_back", "data_front"],
+          "只标出真的变了的平面", str(by_name["master-01"]["changed_planes"]))
+    check(by_name["slave-01"]["action"] == "unchanged", "一模一样 → 不变")
+    check(preview["summary"]["missing"] == 0,
+          "existing 里只有这两台, 没有'模板有而文件没有'的", str(preview["summary"]))
+
+    # 导出 → 再解析, 六个 IP 一个不少
+    node = _FakeNode(hostname="master-01", role_key="master", node_type="master",
+                     mgmt_mac="aa:bb:cc:11:00:01", os_version=None,
+                     plane_ips=rows[0]["plane_ips"])
+    dumped = nodes_import.export([node], product, machine)
+    again, problems = nodes_import.parse(dumped)
+    check(not problems and len(again) == 1, "导出的文件能再导回来", str(problems))
+    check(again[0]["plane_ips"] == rows[0]["plane_ips"], "六个 IP 一个不少",
+          str(again[0]["plane_ips"]))
+    check(again[0]["mac"] == "aa:bb:cc:11:00:01", "MAC 当键, 回导还认得出来")
+
+
+def test_import_decodes_gbk():
+    section("现场的文件可能是 GBK / 带 BOM")
+
+    from services import nodes_import
+
+    raw = {"n1": {"hostname_new": "主节点-01", "bmc_ip": "10.0.0.1"}}
+    for encoding in ("utf-8", "utf-8-sig", "gbk"):
+        blob = json.dumps(raw, ensure_ascii=False).encode(encoding)
+        data = nodes_import.load_bytes(blob)
+        rows, _ = nodes_import.parse(data)
+        check(rows[0]["hostname"] == "主节点-01", f"{encoding} 读得出来", rows[0]["hostname"])
+
+    try:
+        nodes_import.load_bytes(b"{ this is not json }")
+        check(False, "坏 JSON 应该报错")
+    except ValueError as e:
+        check("合法的 JSON" in str(e), "坏 JSON 给一句看得懂的话", str(e))
+
+
+
 def main():
     print("模板分层 / 组网图 / 诊断计划 测试\n")
     for fn in (test_migrate_v2, test_migrate_v1, test_migrate_idempotent,
@@ -841,7 +1010,10 @@ def main():
                test_run_all_isolates_failure, test_tcp_refused,
                test_run_builtin_marks_slow_as_warning,
                test_node_edit_keeps_all_nics, test_node_flat_edit_reaches_planes,
-               test_node_data_protocol_inferred, test_node_create_ignores_unknown_columns):
+               test_node_data_protocol_inferred, test_node_create_ignores_unknown_columns,
+               test_import_reads_field_format, test_import_tolerates_field_shapes,
+               test_import_reports_instead_of_dropping, test_import_matches_roles,
+               test_import_plan_and_export_roundtrip, test_import_decodes_gbk):
         fn()
 
     print()
