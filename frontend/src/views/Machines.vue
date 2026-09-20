@@ -299,14 +299,30 @@
           </el-select>
         </el-form-item>
         <el-form-item label="节点类型"><el-input v-model="nodeForm.node_type" /></el-form-item>
-        <el-form-item label="管理面 IP"><el-input v-model="nodeForm.mgmt_ip" placeholder="BMC 同网段" /></el-form-item>
-        <el-form-item label="控制面 IP"><el-input v-model="nodeForm.ctrl_ip" /></el-form-item>
-        <el-form-item label="数据面 IP">
-          <div class="row">
-            <el-input v-model="nodeForm.data_ip" />
-            <el-input v-model="nodeForm.data_protocol" placeholder="DPDK / RDMA" style="width: 150px" />
+
+        <!-- 一个平面可以有多块网卡, 每个口一个输入框。Master 数据面是四个 IP:
+             前段 DPDK 两个 + 后段 RDMA 两个, 挤在一个框里填不下 -->
+        <el-form-item v-for="pl in nodePlanes" :key="pl.plane" :label="pl.label">
+          <div class="nic-list">
+            <div v-for="(ip, i) in nodeForm.plane_ips[pl.plane]" :key="i" class="nic-line">
+              <span class="nic-no">第 {{ i + 1 }} 口</span>
+              <el-input
+                :model-value="ip" :placeholder="pl.placeholders[i] || 'IP 地址'"
+                @update:model-value="v => (nodeForm.plane_ips[pl.plane][i] = v)"
+              />
+              <el-button link type="danger" size="small"
+                @click="nodeForm.plane_ips[pl.plane].splice(i, 1)">删</el-button>
+            </div>
+            <div class="nic-foot">
+              <el-button link type="primary" size="small"
+                @click="nodeForm.plane_ips[pl.plane].push('')">加一个口</el-button>
+              <span v-if="pl.protocol" class="nic-proto">{{ pl.protocol }}</span>
+              <span v-if="pl.plane === 'management'" class="nic-proto">BMC 同网段</span>
+              <span v-if="!nodeForm.plane_ips[pl.plane].length" class="muted">没有口, 这个平面不参与诊断</span>
+            </div>
           </div>
         </el-form-item>
+
         <el-form-item label="系统"><el-input v-model="nodeForm.os_version" /></el-form-item>
       </el-form>
       <template #footer>
@@ -550,40 +566,86 @@ const reload = async () => {
   }
 }
 
+const roleOf = (key) => currentRoles.value.find(r => r.key === key)
+
+/*
+ * 对话框里要列哪几个平面、每个平面几个口 —— 以模板里那个角色的声明为准,
+ * 再并上这台节点上已经有的(角色被改过、手工加的口也不能弄丢)。
+ *
+ * 认不出角色时(角色删了、手工加的节点)四个平面全给出来, 否则没地方填。
+ */
+const nodePlanes = computed(() => {
+  const role = roleOf(nodeForm.value.role_key)
+  const have = nodeForm.value.plane_ips || {}
+  let keys = (role?.planes || []).map(p => p.plane)
+  Object.keys(have).forEach(p => { if (!keys.includes(p)) keys.push(p) })
+  if (!keys.length) keys = [...PLANE_KEYS]
+  return PLANE_KEYS.filter(p => keys.includes(p)).map(p => {
+    const spec = (role?.planes || []).find(x => x.plane === p)
+    return {
+      plane: p,
+      label: PLANE_LABEL[p],
+      protocol: spec?.protocol || '',
+      // 用模板的网段前缀当占位符, 填的时候不用回去翻模板
+      placeholders: (spec?.prefixes || []).map(x => (x ? `${String(x).replace(/\.$/, '')}.x` : '')),
+    }
+  })
+})
+
+/** 按角色把每个平面的口数补齐到模板声明的数量, 已填的值原样留着 */
+const fitNics = () => {
+  const role = roleOf(nodeForm.value.role_key)
+  const planes = { ...(nodeForm.value.plane_ips || {}) }
+  Object.keys(planes).forEach(p => { planes[p] = [...(planes[p] || [])] })
+  ;(role?.planes || []).forEach(spec => {
+    const want = Math.max(1, (spec.prefixes || []).length)
+    const arr = planes[spec.plane] || []
+    while (arr.length < want) arr.push('')
+    planes[spec.plane] = arr
+  })
+  PLANE_KEYS.forEach(p => { if (!planes[p]) planes[p] = [] })
+  nodeForm.value.plane_ips = planes
+}
+
 const openNode = (row = null) => {
   nodeForm.value = row
-    ? { ...row }
+    ? { ...row, plane_ips: JSON.parse(JSON.stringify(row.plane_ips || {})) }
     : { hostname: '', role_key: currentRoles.value[0]?.key || '', node_type: '',
-        mgmt_ip: '', ctrl_ip: '', data_ip: '', data_protocol: '', os_version: '' }
-  if (!row) onNodeRole()
+        os_version: '', plane_ips: {} }
+  onNodeRole()
   nodeOpen.value = true
 }
 
 const onNodeRole = () => {
-  const role = currentRoles.value.find(r => r.key === nodeForm.value.role_key)
-  if (!role) return
-  if (!nodeForm.value.node_type) nodeForm.value.node_type = role.node_type
-  if (!nodeForm.value.os_version) nodeForm.value.os_version = role.os_version || ''
-  const data = (role.planes || []).find(p => p.plane.startsWith('data'))
-  if (data && !nodeForm.value.data_protocol) nodeForm.value.data_protocol = data.protocol || ''
+  const role = roleOf(nodeForm.value.role_key)
+  if (role) {
+    if (!nodeForm.value.node_type) nodeForm.value.node_type = role.node_type
+    if (!nodeForm.value.os_version) nodeForm.value.os_version = role.os_version || ''
+  }
+  fitNics()
 }
 
 const saveNode = async () => {
   if (!nodeForm.value.hostname?.trim()) { ElMessage.warning('填一个主机名'); return }
   savingNode.value = true
   try {
+    // IP 的正主是 plane_ips —— 扁平字段(mgmt_ip / ctrl_ip / data_ip)由后端按第一个口
+    // 同步, 这边不用也不该自己拼
+    const planeIps = {}
+    Object.entries(nodeForm.value.plane_ips || {}).forEach(([plane, ips]) => {
+      const clean = (ips || []).map(x => String(x || '').trim()).filter(Boolean)
+      if (clean.length) planeIps[plane] = clean
+    })
+    const role = roleOf(nodeForm.value.role_key)
+    const dataPlane = (role?.planes || []).find(p => p.plane.startsWith('data') && planeIps[p.plane])
     const payload = {
       hostname: nodeForm.value.hostname.trim(),
       node_type: nodeForm.value.node_type || nodeForm.value.role_key || 'slave',
       role_key: nodeForm.value.role_key || null,
       product: ws.product,
       machine_type: ws.machineType,
-      // 管理面与 BMC 同网段, 沿用模板展开时的约定
-      mgmt_ip: nodeForm.value.mgmt_ip || null,
-      bmc_ip: nodeForm.value.mgmt_ip || null,
-      ctrl_ip: nodeForm.value.ctrl_ip || null,
-      data_ip: nodeForm.value.data_ip || null,
-      data_protocol: nodeForm.value.data_protocol || null,
+      plane_ips: planeIps,
+      data_protocol: dataPlane?.protocol || nodeForm.value.data_protocol || null,
       os_version: nodeForm.value.os_version || null,
     }
     if (nodeForm.value.id) await axios.put(`/api/nodes/${nodeForm.value.id}`, payload)
@@ -645,6 +707,24 @@ onMounted(() => {
 }
 
 .issue { font-size: 12.5px; line-height: 1.8; }
+
+.nic-list { width: 100%; }
+.nic-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.nic-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.nic-proto {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--cm-text-3);
+}
 
 .muted { color: var(--cm-text-3); font-size: 12px; }
 .bold { font-weight: 700; color: var(--cm-text); }

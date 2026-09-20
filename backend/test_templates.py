@@ -42,7 +42,9 @@ def section(title):
 
 # 模板文件要在导入 template_service 之前指到临时目录, 否则会写到真的 BASE_DIR
 _TMPDIR = tempfile.mkdtemp(prefix="cm-tpl-test-")
-os.environ.setdefault("CLUSTER_MANAGER_DATA_DIR", _TMPDIR)
+# config.py 在 import 时就会按 BASE_DIR 建 iso/ firmware/ 目录并定好 db 路径,
+# 指到临时目录去, 别在 backend/ 下拉一堆东西出来
+os.environ["CLUSTER_MANAGER_DATA"] = _TMPDIR
 
 from services import diag_plan, probe, template_service as ts, topology_service  # noqa: E402
 
@@ -733,6 +735,91 @@ def test_run_builtin_marks_slow_as_warning():
           "建议针对的是控制面, 不是通用套话", items[0]["suggestion"])
 
 
+# ── 5. 节点的 IP: plane_ips 与扁平字段必须一起改 ──────────────────────────────
+
+class _Node:
+    """够 _apply_ips 用的假节点"""
+    def __init__(self, **kw):
+        self.plane_ips = None
+        self.mgmt_ip = self.bmc_ip = self.ctrl_ip = self.data_ip = None
+        self.data_protocol = None
+        self.__dict__.update(kw)
+
+
+def test_node_edit_keeps_all_nics():
+    section("编辑节点: 四个数据口都要能改")
+
+    from api import nodes as nodes_api
+
+    node = _Node(plane_ips={"management": ["172.16.0.11"], "control": ["172.16.3.11"],
+                            "data_front": ["200.1.1.11", "200.1.2.11"],
+                            "data_back": ["100.1.1.11", "100.1.2.11"]})
+    submitted = {"plane_ips": {"management": ["172.16.0.211"], "control": ["172.16.3.211"],
+                               "data_front": ["200.1.1.211", "200.1.2.211"],
+                               "data_back": ["100.1.1.211", "100.1.2.211"]}}
+    nodes_api._apply_ips(node, submitted)
+
+    check(node.plane_ips["data_back"] == ["100.1.1.211", "100.1.2.211"],
+          "后段第二个口存下来了", str(node.plane_ips.get("data_back")))
+    check(node.mgmt_ip == node.bmc_ip == "172.16.0.211",
+          "扁平的管理面/BMC 跟着第一个口走", f"{node.mgmt_ip} / {node.bmc_ip}")
+    check(node.data_ip == "200.1.1.211", "扁平数据面取前段第一个口", str(node.data_ip))
+
+
+def test_node_flat_edit_reaches_planes():
+    section("只改扁平字段(老接口)时, plane_ips 也得跟着变")
+
+    from api import nodes as nodes_api
+
+    # 这是之前真正的坑: 界面把管理面 IP 改了, 而节点表格 / 组网图 / 诊断读的都是
+    # plane_ips —— 一个都没变, 看起来就是"编辑没生效"
+    node = _Node(plane_ips={"management": ["172.16.0.11"],
+                            "data_front": ["200.1.1.11", "200.1.2.11"]},
+                 mgmt_ip="172.16.0.11")
+    nodes_api._apply_ips(node, {"mgmt_ip": "9.9.9.9"})
+    check(node.plane_ips["management"] == ["9.9.9.9"], "管理面跟着改了",
+          str(node.plane_ips["management"]))
+    check(node.plane_ips["data_front"] == ["200.1.1.11", "200.1.2.11"],
+          "其它平面的网卡原样不动", str(node.plane_ips["data_front"]))
+
+    # 第一个口清空时, 后面的网卡不能跟着没了
+    node = _Node(plane_ips={"data_front": ["200.1.1.11", "200.1.2.11"]})
+    nodes_api._apply_ips(node, {"data_ip": ""})
+    check(node.plane_ips.get("data_front") == ["200.1.2.11"],
+          "清掉第一个口, 第二个口还在", str(node.plane_ips))
+
+
+def test_node_data_protocol_inferred():
+    section("只有后段时, 扁平数据面落到后段并认出 RDMA")
+
+    from api import nodes as nodes_api
+
+    node = _Node()
+    nodes_api._apply_ips(node, {"plane_ips": {"management": ["172.16.0.99"],
+                                              "data_back": ["100.1.1.99", "100.1.2.99"]}})
+    check(node.data_ip == "100.1.1.99", "数据面取后段第一个口", str(node.data_ip))
+    check(node.data_protocol == "RDMA", "协议认成 RDMA", str(node.data_protocol))
+    check("control" not in node.plane_ips, "没填的平面不会留一个空壳", str(node.plane_ips))
+
+
+def test_node_create_ignores_unknown_columns():
+    section("请求模型里多出来的字段不能让'加节点'炸掉")
+
+    from models.node import Node
+
+    columns = {c.name for c in Node.__table__.columns}
+    check("cluster_id" not in columns,
+          "模型里确实没有 cluster_id 了(集群那层已撤)")
+    # 之前 NodeCreate 还留着 cluster_id, Node(**node.dict()) 直接 TypeError ——
+    # 整个"加节点"是 500。现在按列过滤
+    payload = {"hostname": "n1", "node_type": "slave", "cluster_id": 3, "不存在的字段": 1}
+    kept = {k: v for k, v in payload.items() if k in columns}
+    check(kept == {"hostname": "n1", "node_type": "slave"}, "只留模型真有的列", str(kept))
+    node = Node(**kept)
+    check(node.hostname == "n1", "构造得出来, 不抛 TypeError")
+
+
+
 def main():
     print("模板分层 / 组网图 / 诊断计划 测试\n")
     for fn in (test_migrate_v2, test_migrate_v1, test_migrate_idempotent,
@@ -752,7 +839,9 @@ def main():
                test_ping_windows_error_reply, test_ping_no_command,
                test_unavailable_is_not_a_fault, test_probe_empty_host,
                test_run_all_isolates_failure, test_tcp_refused,
-               test_run_builtin_marks_slow_as_warning):
+               test_run_builtin_marks_slow_as_warning,
+               test_node_edit_keeps_all_nics, test_node_flat_edit_reaches_planes,
+               test_node_data_protocol_inferred, test_node_create_ignores_unknown_columns):
         fn()
 
     print()
