@@ -30,12 +30,12 @@ dpdk 第二个口就是 .31 不是 .11)。模板负责"该长什么样", nodes.j
 """
 
 import ipaddress
-import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from models.node import Node
 from services import node_ips
+from services.jsonio import load_bytes  # noqa: F401  (nodes_import.load_bytes 老调用点还在用)
 from services import template_service as ts
 
 # 平面 ← 文件里的哪些字段。顺序即优先级, 前面的先认
@@ -352,15 +352,3 @@ def export(nodes: List[Node], product: Dict, machine: Dict) -> Dict:
         # MAC 是 nodes.json 的天然主键(PXE 靠它认机器); 没有就退回主机名
         out[node.mgmt_mac or node.hostname] = entry
     return out
-
-
-def load_bytes(blob: bytes) -> Any:
-    """现场的文件不一定是 UTF-8 —— Windows 上记事本另存为很可能是 GBK"""
-    for encoding in ("utf-8-sig", "utf-8", "gbk"):
-        try:
-            return json.loads(blob.decode(encoding))
-        except UnicodeDecodeError:
-            continue
-        except json.JSONDecodeError as e:
-            raise ValueError(f"这不是一份合法的 JSON: 第 {e.lineno} 行 {e.msg}") from e
-    raise ValueError("文件编码认不出来, 存成 UTF-8 再试一次")

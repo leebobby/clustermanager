@@ -13,12 +13,12 @@
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from models.node import Node, get_db
-from services import template_service, topology_service
+from services import template_service, templates_io, topology_service
 
 router = APIRouter()
 
@@ -175,6 +175,64 @@ def save_templates(body: TemplatesSave) -> Dict[str, Any]:
 
     saved = template_service.write_templates(body.dict())
     return {**saved, "warnings": warnings}
+
+
+# ── 导入 / 导出 ───────────────────────────────────────────────────────────────
+
+@router.get("/export")
+def export_templates(
+    product: Optional[str] = Query(None, description="只导这一个产品; 不给就是整份"),
+) -> Dict[str, Any]:
+    """
+    导出模板文件。
+
+    模板才是要在机器之间搬的那份东西 —— 节点是照着它生成出来的。导出→改几行→
+    导回来是闭环的: 形状和 node_templates.json 一致, 单个产品也能直接导回去。
+    """
+    try:
+        return templates_io.export(product)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/import")
+async def import_templates(
+    file: UploadFile = File(..., description="node_templates.json"),
+    dry_run: bool = Query(True, description="true = 只看会变成什么样, 不写文件"),
+    mode: str = Query("merge", description="merge = 同名产品换掉其余留着; replace = 整份覆盖"),
+) -> Dict[str, Any]:
+    """
+    导入模板。默认只预览: 哪些产品新增 / 覆盖(具体动了哪些角色和台数) / 不变。
+
+    确认之后带 dry_run=false 再传一次才写文件。写完记得让前端点一下
+    POST /api/workspace/reload 把节点对齐过来。
+    """
+    if mode not in templates_io.MODES:
+        raise HTTPException(status_code=400, detail=f"不认识的导入方式: {mode}")
+    try:
+        raw = templates_io.load_bytes(await file.read())
+        incoming, problems = templates_io.parse(raw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    preview = templates_io.plan(template_service.read_templates(), incoming, mode=mode)
+    preview["problems"] = problems
+    preview["filename"] = file.filename
+    preview["dry_run"] = dry_run
+
+    saved = None
+    if not dry_run:
+        try:
+            saved = templates_io.apply(preview)
+        except ValueError as e:
+            # 角色没配平面这一类: 存进去不报错, 但节点会没 IP、组网图会是空的
+            raise HTTPException(status_code=400, detail=str(e))
+
+    # result 是整份合并后的模板, 只给 apply 用 —— 没必要再回一份给前端
+    preview.pop("result", None)
+    if saved:
+        preview["products"] = saved["products"]
+    return preview
 
 
 # ── 组网图 (不碰数据库) ───────────────────────────────────────────────────────

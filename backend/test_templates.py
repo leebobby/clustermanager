@@ -989,6 +989,214 @@ def test_import_decodes_gbk():
 
 
 
+# ── 导入 / 导出模板 ───────────────────────────────────────────────────────────
+# 模板才是要在机器之间搬的那份东西 —— 节点是照着它生成的产物。
+
+
+def test_tpl_export_roundtrip():
+    section("模板导出再导回来: 什么都不该变")
+
+    from services import templates_io as tio
+
+    cur = ts.read_templates()
+    whole = tio.export()
+    check([p["name"] for p in whole["products"]] == [p["name"] for p in cur["products"]],
+          "整份导出把所有产品都带上")
+
+    incoming, problems = tio.parse(whole)
+    preview = tio.plan(cur, incoming, "merge")
+    check(not problems, "自己导出的文件不该有认不出来的东西", str(problems))
+    check(not preview["errors"], "也不该有体检错误", str(preview["errors"]))
+    check(preview["summary"]["update"] == 0 and preview["summary"]["create"] == 0,
+          "原样导回 → 全是「不变」", str(preview["summary"]))
+
+    # 单个产品导出的形状也要能直接导回去 —— 现场最常做的就是只带一个产品走
+    one = tio.export(cur["products"][0]["name"])
+    check(len(one["products"]) == 1, "单产品导出只带一个")
+    incoming, _ = tio.parse(one)
+    check(tio.plan(cur, incoming, "merge")["summary"]["unchanged"] == 1,
+          "单产品原样导回也是「不变」")
+
+
+def test_tpl_diff_says_what_changed():
+    section("预览要说清到底动了哪一行")
+
+    from services import templates_io as tio
+
+    cur = ts.read_templates()
+    edited = json.loads(json.dumps(tio.export(cur["products"][0]["name"])))
+    role = next(r for r in edited["products"][0]["roles"] if r["key"] == "master")
+    role["ip_start"] = 21
+    next(pl for pl in role["planes"] if pl["plane"] == "data_front")["prefixes"] = \
+        ["200.9.1.", "200.9.2."]
+    edited["products"][0]["machine_types"][0]["counts"]["slave"] = 9
+    # 删掉一个角色 —— 这一条必须提醒, 它下面的节点会跟着消失
+    edited["products"][0]["roles"] = [r for r in edited["products"][0]["roles"]
+                                      if r["key"] != "host"]
+
+    incoming, _ = tio.parse(edited)
+    preview = tio.plan(cur, incoming, "merge")
+    item = preview["items"][0]
+    notes = " | ".join(item["notes"])
+    check(item["action"] == "update", "改过 → 覆盖", item["action"])
+    check("200.9.1." in notes and "200.1.1." in notes, "网段改动写出新旧两边", notes)
+    check("11 → 21" in notes, "起始序号改动写出新旧两边", notes)
+    check("slave 12 → 9" in notes, "台数改动逐个角色写出来", notes)
+    check("删掉角色" in notes and "节点会一起消失" in notes,
+          "删角色要说清后果", notes)
+
+
+def test_tpl_merge_vs_replace():
+    section("合并留着别的产品; 整份替换才删")
+
+    from services import templates_io as tio
+
+    cur = ts.read_templates()
+    kept_name = cur["products"][0]["name"]
+    fresh = {"products": [{
+        "name": "另一个产品", "roles": [
+            {"key": "master", "hostname_prefix": "m2",
+             "planes": [{"plane": "management", "prefixes": ["10.0.0."]}]}],
+        "machine_types": [{"name": "小型", "counts": {"master": 2}}]}]}
+    incoming, _ = tio.parse(fresh)
+
+    merged = tio.plan(cur, incoming, "merge")
+    check(merged["summary"]["create"] == 1, "新产品算新增")
+    check(merged["kept"] == [kept_name], "文件里没提到的产品原样留着", str(merged["kept"]))
+    check([p["name"] for p in merged["result"]["products"]] == [kept_name, "另一个产品"],
+          "合并后两个都在, 原有的排在前面",
+          str([p["name"] for p in merged["result"]["products"]]))
+
+    replaced = tio.plan(cur, incoming, "replace")
+    check(replaced["dropped"] == [kept_name], "整份替换要把原产品列进删除名单",
+          str(replaced["dropped"]))
+    check([p["name"] for p in replaced["result"]["products"]] == ["另一个产品"],
+          "整份替换之后只剩文件里那一个")
+
+    try:
+        tio.plan(cur, incoming, "append")
+        check(False, "不认识的导入方式要报错")
+    except ValueError:
+        check(True, "不认识的导入方式要报错")
+
+
+def test_tpl_import_blocks_unusable():
+    section("角色没配平面的模板不能导进去")
+
+    from services import templates_io as tio
+
+    cur = ts.read_templates()
+    bad = {"products": [{"name": "没配平面的", "roles": [
+        {"key": "master", "hostname_prefix": "m", "planes": []}],
+        "machine_types": [{"name": "x", "counts": {"master": 1}}]}]}
+    incoming, _ = tio.parse(bad)
+    preview = tio.plan(cur, incoming, "merge")
+    check(bool(preview["errors"]), "预览就要报出来", str(preview["errors"]))
+
+    before = json.dumps(ts.read_templates(), sort_keys=True, ensure_ascii=False)
+    try:
+        tio.apply(preview)
+        check(False, "有 errors 时 apply 要挡住")
+    except ValueError:
+        check(True, "有 errors 时 apply 要挡住")
+    check(json.dumps(ts.read_templates(), sort_keys=True, ensure_ascii=False) == before,
+          "挡住之后模板文件一个字都不能动")
+
+
+def test_tpl_import_reports_instead_of_dropping():
+    section("认不出来的要报上去, 不静默丢掉")
+
+    from services import templates_io as tio
+
+    odd = {"products": [
+        "这不是个对象",
+        {"description": "没名字"},
+        {"name": "怪的", "roles": [
+            {"key": "master", "hostname_prefix": "m", "planes": [
+                {"plane": "data", "prefixes": ["1.1.1."]},        # 平面名写错
+                {"plane": "control", "prefixes": ["2.2.2."]}]}],
+         "machine_types": [{"name": "x", "counts": {"master": 1, "nosuch": 3}}]},
+    ]}
+    incoming, problems = tio.parse(odd)
+    joined = " | ".join(problems)
+    check(len(incoming["products"]) == 1, "只留认得出来的那一个产品")
+    check("不是一个对象" in joined, "非对象的那一项要报", joined)
+    check("没有 name" in joined, "没名字的那一项要报", joined)
+    check("data" in joined and "会被丢掉" in joined, "平面名写错要报", joined)
+    check("nosuch" in joined, "counts 里对不上角色的键要报", joined)
+    # 报出来之后, 认得出来的部分照样规整好
+    role = incoming["products"][0]["roles"][0]
+    check([p["plane"] for p in role["planes"]] == ["control"],
+          "写错的那条平面丢掉, 对的留下", str(role["planes"]))
+
+
+def test_tpl_import_rejects_wrong_file():
+    section("把 nodes.json 导到模板入口, 要说清导错了")
+
+    from services import templates_io as tio
+
+    try:
+        tio.parse({"aa:bb:cc:11:00:01": {"hostname_new": "master-01", "role": "master"}})
+        check(False, "认不出 products 就该报错")
+    except ValueError as e:
+        check("products" in str(e) and "nodes.json" in str(e),
+              "报错里要指明正确入口在哪", str(e))
+
+    # 单独一个产品对象也算合法输入 —— 手改文件很容易只留一个产品
+    incoming, _ = tio.parse({"name": "单个", "roles": [
+        {"key": "m", "hostname_prefix": "m",
+         "planes": [{"plane": "management", "prefixes": ["10.0.0."]}]}]})
+    check([p["name"] for p in incoming["products"]] == ["单个"],
+          "顶层就是一个产品对象也认")
+
+    # 直接一个数组也认
+    incoming, _ = tio.parse([{"name": "数组里的", "roles": [
+        {"key": "m", "hostname_prefix": "m",
+         "planes": [{"plane": "control", "prefixes": ["2.2.2."]}]}]}])
+    check([p["name"] for p in incoming["products"]] == ["数组里的"], "顶层是数组也认")
+
+    for blob, label in ((b"{", "半截 JSON"), ("不是 json".encode("gbk"), "根本不是 JSON")):
+        try:
+            tio.load_bytes(blob)
+            check(False, f"{label} 要报错")
+        except ValueError:
+            check(True, f"{label} 要报错")
+
+
+def test_tpl_import_then_ips_follow():
+    section("导进模板之后 IP 真按新网段生成")
+
+    from services import templates_io as tio
+
+    cur = ts.read_templates()
+    edited = json.loads(json.dumps(tio.export(cur["products"][0]["name"])))
+    role = next(r for r in edited["products"][0]["roles"] if r["key"] == "master")
+    role["ip_start"] = 21
+    next(pl for pl in role["planes"] if pl["plane"] == "data_front")["prefixes"] = \
+        ["200.9.1.", "200.9.2."]
+
+    incoming, _ = tio.parse(edited)
+    tio.apply(tio.plan(cur, incoming, "merge"))
+
+    # 这一步才是用户说的"导进来要生效": 模板落地了, 展开出来的节点得跟着走
+    product, machine = ts.find_machine_type(
+        cur["products"][0]["name"], cur["products"][0]["machine_types"][0]["name"])
+    planned, _ = ts.expand(product, machine, set(), set())
+    master = next(x for x in planned if x["role_key"] == "master")
+    check(master["plane_ips"]["data_front"] == ["200.9.1.21", "200.9.2.21"],
+          "前段两个口都按新网段 + 新起始序号", str(master["plane_ips"]["data_front"]))
+    check(master["plane_ips"]["management"] == ["172.16.0.21"],
+          "没改的平面只跟着起始序号走", str(master["plane_ips"]["management"]))
+    check(master["hostname"] == "master-21" or master["hostname"].startswith("master-"),
+          "主机名照旧由 hostname_start 决定", master["hostname"])
+
+    # GBK 存的模板文件也要能导 —— Windows 记事本另存为多半是 GBK
+    blob = json.dumps(edited, ensure_ascii=False).encode("gbk")
+    again, _ = tio.parse(tio.load_bytes(blob))
+    check([p["name"] for p in again["products"]] == [edited["products"][0]["name"]],
+          "GBK 的模板文件也读得进来")
+
+
 def main():
     print("模板分层 / 组网图 / 诊断计划 测试\n")
     for fn in (test_migrate_v2, test_migrate_v1, test_migrate_idempotent,
@@ -1013,7 +1221,11 @@ def main():
                test_node_data_protocol_inferred, test_node_create_ignores_unknown_columns,
                test_import_reads_field_format, test_import_tolerates_field_shapes,
                test_import_reports_instead_of_dropping, test_import_matches_roles,
-               test_import_plan_and_export_roundtrip, test_import_decodes_gbk):
+               test_import_plan_and_export_roundtrip, test_import_decodes_gbk,
+               test_tpl_export_roundtrip, test_tpl_diff_says_what_changed,
+               test_tpl_merge_vs_replace, test_tpl_import_blocks_unusable,
+               test_tpl_import_reports_instead_of_dropping,
+               test_tpl_import_rejects_wrong_file, test_tpl_import_then_ips_follow):
         fn()
 
     print()

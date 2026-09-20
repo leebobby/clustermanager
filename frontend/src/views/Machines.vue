@@ -11,9 +11,13 @@
             </span>
             <div class="spacer"></div>
             <el-button size="small" type="primary" plain :disabled="!ready" @click="openNode()">加节点</el-button>
-            <el-button size="small" :disabled="!ready" @click="openImport">导入 nodes.json</el-button>
-            <el-button size="small" :disabled="!ready || !nodes.length" @click="exportNodes">导出</el-button>
+            <el-button size="small" :disabled="!ready || !nodes.length" @click="exportNodes">导出 nodes.json</el-button>
             <el-button size="small" :loading="reloading" :disabled="!ready" @click="reload">重新加载</el-button>
+            <!-- 正路是改模板再「重新加载」; 这个入口只管现场 IP 和模板算出来的对不上
+                 那种情况(比如前段第二个口手配成了别的), 所以做成不显眼的一行小字 -->
+            <el-button link size="small" :disabled="!ready" class="rescue" @click="openImport">
+              从 nodes.json 反填
+            </el-button>
           </header>
 
           <el-alert
@@ -76,6 +80,20 @@
             <span class="bar-title">产品与机台类型</span>
             <span class="bar-sub">产品定义角色, 机台类型只定各角色几台。存 JSON 文件, 不入库。</span>
             <div class="spacer"></div>
+            <el-button @click="openTplImport">导入模板</el-button>
+            <el-dropdown trigger="click" :disabled="!saved.length" @command="exportTemplates">
+              <el-button :disabled="!saved.length">
+                导出模板<el-icon class="el-icon--right"><arrow-down /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="">整份 ({{ saved.length }} 个产品)</el-dropdown-item>
+                  <el-dropdown-item
+                    v-for="p in saved" :key="p.name" :command="p.name" divided
+                  >只导「{{ p.name }}」</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button @click="addProduct">新增产品</el-button>
             <el-button type="primary" :loading="saving" @click="saveTemplates">保存模板</el-button>
           </header>
@@ -292,6 +310,112 @@
       </el-tab-pane>
     </el-tabs>
 
+    <!-- ── 导入模板 ────────────────────────────────────────────── -->
+    <el-dialog v-model="tplImpOpen" title="导入模板" width="820px" top="6vh">
+      <p class="imp-hint">
+        模板是这个工具里唯一要在机器之间搬的东西 —— 产品有哪些角色、每个角色接哪几个平面、
+        网段怎么排、机台类型各几台。节点是照着模板生成的, 导进模板再「重新加载」就都对齐了。
+        <br />
+        认 <code>node_templates.json</code> 原样的格式, 所以导出改几行再导回来是闭环的。
+        先给预览, 确认了才写文件。
+      </p>
+
+      <div class="imp-pick">
+        <input ref="tplFileInput" type="file" accept=".json,application/json" @change="onTplPick" />
+        <span v-if="tplImpFile" class="imp-file cm-mono">{{ tplImpFile.name }}</span>
+        <el-button v-if="tplImpFile" link type="primary" size="small" :loading="tplImporting"
+          @click="tplPreview">重新解析</el-button>
+      </div>
+
+      <div class="imp-mode">
+        <el-radio-group v-model="tplImpMode" size="small" @change="tplImpFile && tplPreview()">
+          <el-radio-button value="merge">合并</el-radio-button>
+          <el-radio-button value="replace">整份替换</el-radio-button>
+        </el-radio-group>
+        <span class="muted">{{ tplImpMode === 'merge'
+          ? '同名产品整个换掉, 新产品追加, 文件里没提到的产品留着'
+          : '模板文件整份换成这一份 —— 文件里没有的产品会被删掉' }}</span>
+      </div>
+
+      <el-alert v-if="tplImpError" :title="tplImpError" type="error" show-icon :closable="false" />
+
+      <template v-if="tplImpPreview">
+        <div class="imp-sum">
+          <span class="cm-chip cm-chip--brand">新增 {{ tplImpPreview.summary.create }}</span>
+          <span class="cm-chip cm-chip--warn">覆盖 {{ tplImpPreview.summary.update }}</span>
+          <span class="cm-chip cm-chip--idle">不变 {{ tplImpPreview.summary.unchanged }}</span>
+          <span v-if="tplImpPreview.summary.kept" class="cm-chip cm-chip--idle">
+            原样留着 {{ tplImpPreview.summary.kept }}
+          </span>
+          <span v-if="tplImpPreview.summary.dropped" class="cm-chip cm-chip--fail">
+            删掉 {{ tplImpPreview.summary.dropped }}
+          </span>
+        </div>
+
+        <!-- 存下去不会报错, 但节点会没 IP、组网图会是空的 —— 这一类直接挡住 -->
+        <el-alert
+          v-if="tplImpPreview.errors && tplImpPreview.errors.length"
+          type="error" show-icon :closable="false" title="这份模板有画不出图的地方, 先改文件再导"
+        >
+          <div v-for="m in tplImpPreview.errors" :key="m" class="issue">{{ m }}</div>
+        </el-alert>
+        <el-alert
+          v-if="tplImpPreview.problems && tplImpPreview.problems.length"
+          type="warning" show-icon :closable="false" title="这些没认出来, 导进去不会生效"
+        >
+          <div v-for="m in tplImpPreview.problems" :key="m" class="issue">{{ m }}</div>
+        </el-alert>
+        <el-alert
+          v-if="tplImpPreview.warnings && tplImpPreview.warnings.length"
+          type="warning" show-icon :closable="false" title="提醒"
+        >
+          <div v-for="m in tplImpPreview.warnings" :key="m" class="issue">{{ m }}</div>
+        </el-alert>
+
+        <el-table :data="tplImpPreview.items" size="small" max-height="300" border>
+          <el-table-column label="动作" width="72">
+            <template #default="{ row }">
+              <span class="cm-chip cm-chip--tiny" :class="ACTION_CLASS[row.action]">
+                {{ TPL_ACTION_TEXT[row.action] }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="产品" min-width="150">
+            <template #default="{ row }"><span class="bold">{{ row.name }}</span></template>
+          </el-table-column>
+          <el-table-column prop="roles" label="角色" width="70" align="right" />
+          <el-table-column prop="machine_types" label="机台类型" width="86" align="right" />
+          <el-table-column label="具体变化" min-width="300">
+            <template #default="{ row }">
+              <div v-if="row.notes.length">
+                <div v-for="n in row.notes" :key="n" class="issue">{{ n }}</div>
+              </div>
+              <span v-else class="muted">和现在的一模一样</span>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div v-if="tplImpPreview.dropped.length" class="imp-missing">
+          <span class="warn-text">整份替换会删掉这些产品:</span>
+          <span class="cm-mono">{{ tplImpPreview.dropped.join('、') }}</span>
+          <span class="muted">—— 它们下面已经生成的节点也会跟着没</span>
+        </div>
+        <div v-else-if="tplImpPreview.kept.length" class="imp-missing">
+          <span class="muted">文件里没提到、原样留着:</span>
+          <span class="cm-mono">{{ tplImpPreview.kept.join('、') }}</span>
+        </div>
+      </template>
+
+      <template #footer>
+        <el-button @click="tplImpOpen = false">取消</el-button>
+        <el-button
+          type="primary" :loading="tplImporting"
+          :disabled="!tplImpPreview || (tplImpPreview.errors || []).length > 0"
+          @click="doTplImport"
+        >确认导入</el-button>
+      </template>
+    </el-dialog>
+
     <!-- ── 导入 nodes.json ──────────────────────────────────────── -->
     <el-dialog v-model="importOpen" title="导入 nodes.json" width="860px" top="6vh">
       <p class="imp-hint">
@@ -422,6 +546,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
+import { ArrowDown } from '@element-plus/icons-vue'
 import { ws, ready, loadWorkspace, reloadNodes } from '@/stores/workspace'
 import { planeColors, PLANE_LABEL } from '@/styles/tokens'
 
@@ -465,9 +590,19 @@ const importNotes = computed(() => {
 })
 
 const ACTION_TEXT = { create: '新增', update: '更新', unchanged: '不变' }
+// 产品是整个换掉的, 说"更新"不够准 —— 覆盖才是实际发生的事
+const TPL_ACTION_TEXT = { create: '新增', update: '覆盖', unchanged: '不变' }
 const ACTION_CLASS = {
   create: 'cm-chip--brand', update: 'cm-chip--warn', unchanged: 'cm-chip--idle',
 }
+
+const tplImpOpen = ref(false)
+const tplImporting = ref(false)
+const tplImpFile = ref(null)
+const tplImpPreview = ref(null)
+const tplImpError = ref('')
+const tplImpMode = ref('merge')
+const tplFileInput = ref(null)
 
 const currentRoles = computed(() => saved.value.find(p => p.name === ws.product)?.roles || [])
 
@@ -826,16 +961,110 @@ const doImport = async () => {
   }
 }
 
+/** 存一份 JSON 到本地 —— 导模板和导 nodes.json 共用 */
+const downloadJson = (data, name) => {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name.replace(/[\\/:*?"<>|\s]+/g, '_')
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ── 导入 / 导出模板 ─────────────────────────────────────────────────────────
+// 模板才是要在机器之间搬的那份东西。节点是照着它生成的产物, 所以导完模板顺手把
+// 当前机台的节点对齐一遍 —— 不然人看到的又是"模板导进来了, IP 没跟着变"
+
+const openTplImport = () => {
+  tplImpFile.value = null
+  tplImpPreview.value = null
+  tplImpError.value = ''
+  tplImpOpen.value = true
+}
+
+const onTplPick = (e) => {
+  tplImpFile.value = e.target.files?.[0] || null
+  tplImpPreview.value = null
+  tplImpError.value = ''
+  if (tplImpFile.value) tplPreview()
+}
+
+const tplPost = async (dryRun) => {
+  const form = new FormData()
+  form.append('file', tplImpFile.value)
+  const { data } = await axios.post(
+    `/api/templates/import?dry_run=${dryRun}&mode=${tplImpMode.value}`, form)
+  return data
+}
+
+const tplPreview = async () => {
+  if (!tplImpFile.value) return
+  tplImporting.value = true
+  tplImpError.value = ''
+  try {
+    tplImpPreview.value = await tplPost(true)
+  } catch (e) {
+    tplImpPreview.value = null
+    tplImpError.value = e?.response?.data?.detail || e.message || '解析失败'
+  } finally {
+    tplImporting.value = false
+  }
+}
+
+const doTplImport = async () => {
+  if (!tplImpFile.value) return
+  tplImporting.value = true
+  tplImpError.value = ''
+  try {
+    const data = await tplPost(false)
+    const bits = []
+    if (data.summary.create) bits.push(`新增 ${data.summary.create}`)
+    if (data.summary.update) bits.push(`覆盖 ${data.summary.update}`)
+    if (data.summary.dropped) bits.push(`删掉 ${data.summary.dropped}`)
+    tplImpOpen.value = false
+
+    await loadTemplates()
+    await loadWorkspace({ force: true })
+    // 导进来的产品/机台类型可能和原来选的不是一个, resolve() 会落到第一个可用的,
+    // 这里跟着它把节点对齐过来
+    let synced = null
+    if (ready.value) {
+      try {
+        synced = await reloadNodes()
+        await loadNodes()
+      } catch (e) { /* 模板导进去了才是关键, 对齐失败就让人自己点「重新加载」 */ }
+    }
+    const nodeBits = []
+    if (synced?.created?.length) nodeBits.push(`新增 ${synced.created.length}`)
+    if (synced?.updated?.length) nodeBits.push(`更新 ${synced.updated.length}`)
+    if (synced?.removed?.length) nodeBits.push(`移除 ${synced.removed.length}`)
+    ElMessage.success(
+      !bits.length ? '文件和现在的模板一致, 没有改动'
+      : `模板已导入: ${bits.join(' · ')}` +
+        (nodeBits.length ? `; 当前机台的节点已对齐: ${nodeBits.join(' · ')}` : '')
+    )
+  } catch (e) {
+    tplImpError.value = e?.response?.data?.detail || e.message || '导入失败'
+  } finally {
+    tplImporting.value = false
+  }
+}
+
+const exportTemplates = async (product) => {
+  try {
+    const { data } = await axios.get('/api/templates/export',
+      { params: product ? { product } : {} })
+    downloadJson(data, `node_templates-${product || 'all'}.json`)
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || e.message || '导出失败')
+  }
+}
+
 const exportNodes = async () => {
   try {
     const { data } = await axios.get('/api/workspace/nodes/export')
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `nodes-${ws.machineType || 'export'}.json`.replace(/[\\/:*?"<>|\s]+/g, '_')
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadJson(data, `nodes-${ws.machineType || 'export'}.json`)
   } catch (e) {
     ElMessage.error(e?.response?.data?.detail || e.message || '导出失败')
   }
@@ -934,10 +1163,21 @@ onMounted(() => {
 .imp-missing {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 12px;
   font-size: 12px;
 }
+.warn-text { color: var(--cm-crit); font-weight: 600; }
+.imp-mode {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+/* 「从 nodes.json 反填」是兜底入口, 正路是改模板再「重新加载」 —— 排版上也别抢戏 */
+.rescue { margin-left: 4px; font-size: 12px; color: var(--cm-text-3); }
 
 .nic-list { width: 100%; }
 .nic-line {
