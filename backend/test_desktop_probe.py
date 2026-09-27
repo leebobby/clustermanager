@@ -14,6 +14,7 @@ import ntpath
 import os
 import sys
 import tempfile
+import time
 import types
 from pathlib import Path
 from unittest import mock
@@ -207,37 +208,128 @@ def test_find_chromium() -> None:
         os.unlink(edge)
 
 
+class _FakeProc:
+    """假的浏览器进程: wait() 按 delay 秒后返回"""
+
+    def __init__(self, delay: float = 0.0):
+        self.delay = delay
+        self.waited = False
+
+    def wait(self):
+        self.waited = True
+        if self.delay:
+            time.sleep(self.delay)
+        return 0
+
+
+@contextlib.contextmanager
+def _tmp_marker():
+    """把"提示弹过了"的标记指到临时文件, 别动真的数据目录"""
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, ".browser-mode-notified")
+    with mock.patch.object(desktop, "_notice_marker", lambda: path):
+        yield path
+
+
 def test_browser_fallback() -> None:
     print("\n=== 浏览器兜底 ===")
     with mock.patch.object(desktop, "_find_chromium", return_value="/x/msedge.exe"), \
+         mock.patch.object(desktop, "_browser_profile_dir", return_value="/tmp/prof"), \
          mock.patch("subprocess.Popen") as popen:
-        how = desktop._open_in_browser("http://127.0.0.1:8000")
+        how, proc = desktop._open_in_browser("http://127.0.0.1:8000")
     argv = popen.call_args[0][0] if popen.call_args else []
     check(how == "app" and "--app=http://127.0.0.1:8000" in argv,
           "有 Chromium -> --app 应用窗口模式(无标签栏)", " ".join(argv[1:]))
+    check(proc is popen.return_value, "app 模式要把进程句柄带回来(拿它当退出信号)")
+    # 不带独立资料目录的话, 本机已经开着 Edge 时新进程会把窗口交给已有实例然后
+    # 自己退出 —— 句柄立刻结束, 会被误判成"用户关了界面"而停掉后端
+    check("--user-data-dir=/tmp/prof" in argv,
+          "必须带独立 --user-data-dir, 否则窗口会被已有 Edge 实例接走", " ".join(argv[1:]))
 
     with mock.patch.object(desktop, "_find_chromium", return_value=""), \
          mock.patch("webbrowser.open", return_value=True) as wb:
-        how = desktop._open_in_browser("http://x")
-    check(how == "default" and wb.called, "没有 Chromium -> 系统默认浏览器")
+        how, proc = desktop._open_in_browser("http://x")
+    check(how == "default" and wb.called and proc is None,
+          "没有 Chromium -> 系统默认浏览器, 没有句柄可守")
 
     with mock.patch.object(desktop, "_find_chromium", return_value="/x/msedge.exe"), \
+         mock.patch.object(desktop, "_browser_profile_dir", return_value="/tmp/prof"), \
          mock.patch("subprocess.Popen", side_effect=OSError("boom")), \
          mock.patch("webbrowser.open", return_value=True) as wb:
-        how = desktop._open_in_browser("http://x")
-    check(how == "default" and wb.called, "--app 模式失败 -> 降级默认浏览器")
+        how, proc = desktop._open_in_browser("http://x")
+    check(how == "default" and wb.called and proc is None, "--app 模式失败 -> 降级默认浏览器")
 
     with mock.patch.object(desktop, "_find_chromium", return_value=""), \
          mock.patch("webbrowser.open", side_effect=OSError("nope")):
-        how = desktop._open_in_browser("http://x")
-    check(how == "failed", "全都打不开 -> failed(弹窗提示手动复制地址)")
+        how, proc = desktop._open_in_browser("http://x")
+    check(how == "failed" and proc is None, "全都打不开 -> failed(弹窗提示手动复制地址)")
 
-    for how in ("app", "default", "failed"):
-        with mock.patch.object(desktop, "_open_in_browser", return_value=how), \
+
+def test_app_window_is_the_anchor() -> None:
+    """
+    这一组是这次改动的要害: 应用窗口模式下不能再拿模态框当进程锚点。
+
+    老行为是弹一个框卡住主线程, 用户得一直让它开着, 点「确定」反而把后端停了,
+    浏览器窗口跟着废掉。现在守的是浏览器进程本身。
+    """
+    print("\n=== 应用窗口当进程锚点 ===")
+
+    # 1) 有句柄 -> 等窗口关闭, 全程不弹阻塞框。
+    #    这里把"秒退保护"的门槛调成 0: 那条是另一回事, 下面第 3 点单独测
+    proc = _FakeProc()
+    with _tmp_marker(), \
+         mock.patch.object(desktop, "_APP_WINDOW_MIN_SECONDS", 0), \
+         mock.patch.object(desktop, "_open_in_browser", return_value=("app", proc)), \
+         mock.patch.object(desktop, "_message_box") as box, \
+         mock.patch.object(desktop, "_notify_async") as notify:
+        desktop._run_in_browser("http://x", "缺 WebView2")
+    check(proc.waited, "等的是浏览器进程(窗口关了才返回)")
+    check(not box.called, "不再拿模态框当锚点(点确定不会再把后端停掉)")
+    check(notify.called and "关掉界面窗口即退出" in notify.call_args[0][1],
+          "提示要说清怎么退出", notify.call_args[0][1][:40] if notify.called else "(没弹)")
+
+    # 2) 提示只弹第一次 —— 缺 WebView2 是长期状态, 每次启动都弹是骚扰
+    with _tmp_marker():
+        for i in range(2):
+            with mock.patch.object(desktop, "_APP_WINDOW_MIN_SECONDS", 0), \
+                 mock.patch.object(desktop, "_open_in_browser",
+                                   return_value=("app", _FakeProc())), \
+                 mock.patch.object(desktop, "_message_box"), \
+                 mock.patch.object(desktop, "_notify_async") as notify:
+                desktop._run_in_browser("http://x", "缺 WebView2")
+            check(notify.called if i == 0 else not notify.called,
+                  f"第 {i + 1} 次启动{'要' if i == 0 else '不再'}弹提示")
+
+    # 3) 进程秒退 = 窗口被已有实例接走, 不能当成"用户关了界面"
+    with _tmp_marker(), \
+         mock.patch.object(desktop, "_open_in_browser",
+                           return_value=("app", _FakeProc())), \
+         mock.patch.object(desktop, "_message_box") as box, \
+         mock.patch.object(desktop, "_notify_async"), \
+         mock.patch.object(desktop, "_APP_WINDOW_MIN_SECONDS", 999):
+        desktop._run_in_browser("http://x", "缺 WebView2")
+    check(box.called, "句柄秒退 -> 退回模态框守着, 不要直接把后端停掉")
+
+    # 4) 没有句柄(默认浏览器 / 没打开) -> 还是模态框, 文案要齐
+    for how in ("default", "failed"):
+        with _tmp_marker(), \
+             mock.patch.object(desktop, "_open_in_browser", return_value=(how, None)), \
              mock.patch.object(desktop, "_message_box") as box:
             desktop._run_in_browser("http://x", "缺 WebView2")
         ok = box.called and "缺 WebView2" in box.call_args[0][1]
-        check(ok, f"how={how}: 文案齐全且带上原因(不会 KeyError)")
+        check(ok, f"how={how}: 没句柄可守 -> 模态框当锚点, 文案带上原因")
+
+    # 5) wait() 自己抛异常也不能把程序卡死在这里
+    class _Boom(_FakeProc):
+        def wait(self):
+            raise RuntimeError("handle gone")
+
+    with _tmp_marker(), \
+         mock.patch.object(desktop, "_open_in_browser", return_value=("app", _Boom())), \
+         mock.patch.object(desktop, "_message_box") as box, \
+         mock.patch.object(desktop, "_notify_async"):
+        desktop._run_in_browser("http://x", "缺 WebView2")
+    check(box.called, "等待句柄抛异常 -> 退回模态框, 不让进程无声无息地跑着")
 
 
 def test_check_report() -> None:
@@ -261,6 +353,7 @@ def main() -> int:
     test_version_parse()
     test_find_chromium()
     test_browser_fallback()
+    test_app_window_is_the_anchor()
     test_check_report()
 
     print()

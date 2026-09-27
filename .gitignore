@@ -34,6 +34,9 @@ backend/pxe_host.json
 backend/ssh_credentials.json
 # 机台型号模板 (运行时可在页面上编辑, 首次启动自动生成默认模板)
 backend/node_templates.json
+# 缺 WebView2 时用浏览器应用窗口承载界面, 这是它的独立用户资料目录
+backend/browser-profile/
+backend/.browser-mode-notified
 
 # ── WebView2 固定版运行时 (约 180MB, 构建时打进包, 不入库) ──
 build_resources/

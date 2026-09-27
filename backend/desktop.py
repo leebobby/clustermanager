@@ -7,7 +7,9 @@
 WebView2 运行时三种来源，按优先级：
   1. 随包携带的固定版  exe 同级 webview2\msedgewebview2.exe（离线免安装、免管理员）
   2. 系统已安装的运行时  Win11 内置；Win10 通常没有
-  3. 都没有 → 不开原生窗口，改用系统默认浏览器打开
+  3. 都没有 → 不开原生窗口，改用 Edge/Chrome 的 --app 应用窗口承载界面
+     （没有标签栏和地址栏，观感与原生窗口一致）。守的是那个浏览器进程本身，
+     关掉界面窗口程序就退出，跟原生窗口一个手感；说明只在第一次弹一次
 
 第 3 条是必须的：WebView2 缺失时 pywebview 会静默退回 MSHTML(IE11) 内核，
 Vue 3 在 IE 里直接渲染成一片空白 —— 用户看到的就是"窗口打开了但全白"，
@@ -182,11 +184,14 @@ def probe_webview2() -> dict:
 
 def _message_box(title: str, text: str) -> None:
     """
-    弹一个系统模态框。
+    弹一个系统模态框, 并卡住调用线程。
 
-    desktop 模式是 console=False 打的包, 没有控制台可以说话; 而且这个模态框
-    还兼任"进程存活锚点"—— 后端跑在守护线程里, 主线程卡在这儿, 用户点确定
-    才退出。否则进程会变成一个看不见也关不掉的后台服务。
+    desktop 模式是 console=False 打的包, 没有控制台可以说话; 这个模态框还兼任
+    "进程存活锚点"—— 后端跑在守护线程里, 主线程卡在这儿, 用户点确定才退出。
+    否则进程会变成一个看不见也关不掉的后台服务。
+
+    只在"界面不是我们拉起来的"时候才用它当锚点(退到系统默认浏览器 / 压根没打开)。
+    应用窗口模式有进程句柄可守, 走 _notify_async + proc.wait(), 别在那儿用它。
     """
     if os.name == "nt":
         try:
@@ -241,42 +246,156 @@ def _find_chromium() -> str:
     return ""
 
 
-def _open_in_browser(url: str) -> str:
+# 浏览器承载时用的独立用户资料目录与"提示只弹一次"的标记, 都放数据目录 ——
+# exe 可能装在 Program Files 里, 那边写不进去
+def _browser_profile_dir() -> str:
+    from config import BASE_DIR
+    return os.path.join(BASE_DIR, "browser-profile")
+
+
+def _notice_marker() -> str:
+    from config import BASE_DIR
+    return os.path.join(BASE_DIR, ".browser-mode-notified")
+
+
+def _notice_seen() -> bool:
+    """这台机器提示过没有 —— 缺 WebView2 是个长期状态, 每次启动都弹一遍是骚扰"""
+    try:
+        return os.path.isfile(_notice_marker())
+    except Exception:
+        return False
+
+
+def _mark_notice_seen() -> None:
+    try:
+        path = _notice_marker()
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("缺 WebView2 运行时时改用浏览器应用窗口。删掉本文件可让提示再弹一次。\n")
+    except Exception as exc:
+        print(f"[desktop] 记录提示标记失败(不影响使用): {exc}")
+
+
+def _open_in_browser(url: str):
     """
-    打开页面, 返回用的方式: app(无标签栏的应用窗口) / default(默认浏览器) / failed。
+    打开页面, 返回 (方式, 进程句柄)。
+
+    方式: app(无标签栏的应用窗口) / default(默认浏览器) / failed。
+    进程句柄只有 app 模式才有, 用来当"窗口关了没有"的信号; 其余为 None。
 
     优先 Chromium 的 --app 模式: 出来是一个没有标签栏和地址栏的窗口, 观感和
     原生窗口基本一致, 比丢进浏览器标签页体面得多。
+
+    这里必须给一个自己的 --user-data-dir: 不给的话, 本机已经开着 Edge 时新进程
+    会把窗口交给那个已有实例然后自己退出 —— 我们拿到的句柄立刻就结束了, 会被
+    误判成"用户关掉了界面"而把后端一起停掉。带上独立资料目录, 这个进程才真正
+    拥有那个窗口。
     """
     chromium = _find_chromium()
     if chromium:
         try:
             import subprocess
 
-            subprocess.Popen([chromium, f"--app={url}", "--window-size=1400,900"],
-                             close_fds=True)
+            argv = [
+                chromium,
+                f"--app={url}",
+                "--window-size=1400,900",
+                f"--user-data-dir={_browser_profile_dir()}",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ]
+            proc = subprocess.Popen(argv, close_fds=True)
             print(f"[desktop] 已用应用窗口模式打开: {chromium}")
-            return "app"
+            return "app", proc
         except Exception as exc:
             print(f"[desktop] --app 模式失败, 退回默认浏览器: {exc}")
     try:
         webbrowser.open(url)
-        return "default"
+        return "default", None
     except Exception as exc:
         print(f"[desktop] 打开浏览器失败: {exc}")
-        return "failed"
+        return "failed", None
+
+
+# 应用窗口起来得比这还快就说明它没真正拥有窗口(多半是交给了已有的浏览器实例),
+# 这时候不能拿它当退出信号, 退回用模态框守着
+_APP_WINDOW_MIN_SECONDS = 3.0
+
+_HOW_TEXT = {
+    "app": "已用 Edge/Chrome 的应用窗口模式打开(没有标签栏和地址栏, 观感与原生窗口一致)。",
+    "default": "已用系统默认浏览器打开。",
+    "failed": "自动打开浏览器失败, 请手动复制下面的地址到浏览器。",
+}
+
+_FIX_HINT = (
+    "想用内置窗口, 二选一(都不需要联网):\n"
+    "  1. 发布包里放入 webview2\\ 固定版运行时目录 —— 免安装、免管理员\n"
+    "     (打包时加 --webview2 参数);\n"
+    "  2. 在本机用管理员安装 Edge WebView2 离线安装包。"
+)
+
+
+def _notify_async(title: str, text: str) -> None:
+    """
+    弹提示但不挡着主线程 —— 它只是个说明, 不再兼任"进程存活锚点"。
+
+    非 Windows / 弹窗失败就打印了事, 绝不能在这里阻塞: 调用方接下来要靠
+    proc.wait() 守着窗口。
+    """
+    def run():
+        if os.name == "nt":
+            try:
+                ctypes.windll.user32.MessageBoxW(None, text, title, 0x40)
+                return
+            except Exception as exc:
+                print(f"[desktop] MessageBoxW 失败: {exc}")
+        print(f"\n=== {title} ===\n{text}\n")
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 def _run_in_browser(url: str, reason: str) -> None:
-    """用浏览器承载界面, 并用模态框把进程留住"""
-    print(f"[desktop] 退回浏览器模式: {reason}")
-    how = _open_in_browser(url)
+    """
+    用浏览器承载界面, 并把进程留到界面关掉为止。
 
-    opened = {
-        "app": "已用 Edge/Chrome 的应用窗口模式打开(没有标签栏和地址栏, 观感与原生窗口一致)。",
-        "default": "已用系统默认浏览器打开。",
-        "failed": "自动打开浏览器失败, 请手动复制下面的地址到浏览器。",
-    }[how]
+    应用窗口模式下, 守着的是那个浏览器进程本身: 用户关掉界面窗口, 这里就返回,
+    程序正常退出 —— 和原生窗口一个手感。上一版是拿模态框当锚点, 结果那个框得
+    一直开着, 点「确定」反而把后端停了, 浏览器窗口跟着废掉。
+
+    没有句柄可守(退到系统默认浏览器, 或压根没打开)时才退回模态框: 那种情况下
+    界面不是我们拉起来的, 关没关我们看不见, 只能让人手动点确定来结束。
+    """
+    print(f"[desktop] 退回浏览器模式: {reason}")
+    how, proc = _open_in_browser(url)
+    opened = _HOW_TEXT[how]
+
+    if proc is not None:
+        # 缺 WebView2 是这台机器的长期状态, 提示只在第一次弹
+        if not _notice_seen():
+            _notify_async(
+                "Cluster Manager",
+                f"本机没有可用的内置渲染内核, {opened}\n\n"
+                f"原因: {reason}\n"
+                f"地址: {url}\n\n"
+                "功能完全一样, 只是外壳不同。关掉界面窗口即退出程序。\n\n"
+                f"{_FIX_HINT}\n\n"
+                "(这个提示只在第一次出现)",
+            )
+            _mark_notice_seen()
+
+        started = time.time()
+        try:
+            proc.wait()
+        except KeyboardInterrupt:
+            print("[desktop] 收到中断, 退出")
+            return
+        except Exception as exc:
+            print(f"[desktop] 等待浏览器进程异常: {exc!r}")
+        else:
+            if time.time() - started >= _APP_WINDOW_MIN_SECONDS:
+                print("[desktop] 界面窗口已关闭, 退出")
+                return
+            print("[desktop] 浏览器进程秒退(窗口多半交给了已有实例), 改用模态框守着")
 
     _message_box(
         "Cluster Manager",
@@ -284,12 +403,10 @@ def _run_in_browser(url: str, reason: str) -> None:
         f"原因: {reason}\n"
         f"地址: {url}\n\n"
         "功能完全一样, 只是外壳不同。\n\n"
-        "想用内置窗口, 二选一(都不需要联网):\n"
-        "  1. 发布包里放入 webview2\\ 固定版运行时目录 —— 免安装、免管理员\n"
-        "     (打包时加 --webview2 参数);\n"
-        "  2. 在本机用管理员安装 Edge WebView2 离线安装包。\n\n"
+        f"{_FIX_HINT}\n\n"
         "点「确定」将停止后台服务并退出程序 —— 浏览器窗口也就打不开了。",
     )
+
 
 # 局域网共享模式 (CLUSTER_MANAGER_BIND=0.0.0.0):
 #   uvicorn 绑定 0.0.0.0, 局域网其他机器可通过 IP+端口浏览器访问
@@ -396,7 +513,8 @@ def _check_report() -> str:
     if status["source"] == "none":
         lines += [
             "结论: 本机无法使用内置原生窗口, 启动时会自动改用浏览器承载界面"
-            + ("(Edge/Chrome 应用窗口模式, 无标签栏)。" if _find_chromium() else "(系统默认浏览器)。"),
+            + ("(Edge/Chrome 应用窗口模式, 无标签栏; 关掉窗口即退出程序)。"
+               if _find_chromium() else "(系统默认浏览器; 靠提示框留住进程, 点确定退出)。"),
             "想要原生窗口, 二选一:",
             "  1. 安装 Edge WebView2 运行时(需管理员, 有离线安装包, 无需联网);",
             "  2. 让打包方用 --webview2 把固定版运行时放进发布包 webview2\\ 目录",
