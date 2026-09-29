@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 /*
- * 三项导航, 以组网图为落地页。
+ * 三项导航, 以告警与日志（诊断）为落地页。
  *
  * 没有"集群"页 —— 本工具一次只对着一台机台, 打开时选机台类型, 节点按模板加载。
  * 模板的修改入口在「机台与模板」里。
@@ -15,24 +15,24 @@ import { createRouter, createWebHistory } from 'vue-router'
 const routes = [
   {
     path: '/',
+    name: 'Diagnose',
+    component: () => import('@/views/Diagnose.vue'),
+    meta: { title: '告警与日志' }
+  },
+  {
+    path: '/network',
     name: 'NetworkMap',
     component: () => import('@/views/NetworkMap.vue'),
     meta: { title: '组网图' }
   },
-  // 旧书签: 之前落地页是一键诊断, /network 指的是组网图
-  { path: '/network', redirect: '/' },
   {
     path: '/machines',
     name: 'Machines',
     component: () => import('@/views/Machines.vue'),
     meta: { title: '机台与模板' }
   },
-  {
-    path: '/logs',
-    name: 'Logs',
-    component: () => import('@/views/Diagnose.vue'),
-    meta: { title: '告警与日志' }
-  },
+  // 保留旧书签, 诊断页现在是默认首页
+  { path: '/logs', redirect: '/' },
   {
     path: '/alerts',
     name: 'Alerts',
@@ -44,7 +44,7 @@ const routes = [
   // { path: '/pxe',     name: 'PXEDeploy', component: () => import('@/views/PXEDeploy.vue'), meta: { title: 'PXE部署' } },
   // { path: '/patrol',  name: 'Patrol',    component: () => import('@/views/Patrol.vue'),    meta: { title: '巡检管理' } },
 
-  // 未匹配到的路径(含 /clusters、/nodes、/checkup 这些旧书签)统一兜回组网图, 避免白屏
+  // 未匹配到的路径(含 /clusters、/nodes、/checkup 这些旧书签)统一兜回诊断页, 避免白屏
   {
     path: '/:pathMatch(.*)*',
     redirect: '/'

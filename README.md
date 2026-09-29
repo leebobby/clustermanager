@@ -96,6 +96,25 @@
 - 诊断脚本库（业务诊断 + 硬件诊断 + 日志导出）
 - 脚本可以「认领」模板里的某项角色专项检查，认领后就会参与一键诊断
 
+#### 诊断脚本默认 SSH 凭据
+
+发布包中的 `cluster_manager_config.json` 可以为执行脚本和日志导出配置默认 SSH 凭据：
+
+```json
+{
+  "diagnose": {
+    "ssh_user": "root",
+    "ssh_password": "请填写现场默认密码",
+    "ssh_port": 22
+  }
+}
+```
+
+开发模式下，复制 `backend/cluster_manager_config.example.json` 为
+`backend/cluster_manager_config.json` 后再填写。诊断页面中另行输入并保存的凭据优先于
+配置文件；清除页面保存的凭据后会重新使用配置文件默认值。两个文件都可能包含明文密码，
+不要提交填有真实密码的 `cluster_manager_config.json` 或 `ssh_credentials.json`。
+
 ## 快速启动
 
 ### 后端

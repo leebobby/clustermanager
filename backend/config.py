@@ -32,5 +32,6 @@ ISO_DIR             = os.environ.get("CLUSTER_MANAGER_ISO_DIR") or os.path.join(
 # 固件仓库目录: 集群节点 firstboot 阶段从此处拉取 NIC/HBA/SSD 固件
 FIRMWARE_DIR        = os.environ.get("CLUSTER_MANAGER_FIRMWARE_DIR") or os.path.join(BASE_DIR, "firmware")
 SCRIPTS_BUNDLE_PATH = os.path.join(BASE_DIR, "scripts_bundle.json")
+APP_CONFIG_PATH      = os.path.join(BASE_DIR, "cluster_manager_config.json")
 os.makedirs(ISO_DIR, exist_ok=True)
 os.makedirs(FIRMWARE_DIR, exist_ok=True)

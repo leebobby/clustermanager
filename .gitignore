@@ -32,6 +32,8 @@ backend/pxe_data/
 backend/pxe_host.json
 # SSH 凭据 (含明文密码), 仅本地运行时持久化
 backend/ssh_credentials.json
+# 部署侧诊断默认凭据（示例文件可提交，真实配置不可提交）
+backend/cluster_manager_config.json
 # 机台型号模板 (运行时可在页面上编辑, 首次启动自动生成默认模板)
 backend/node_templates.json
 # 缺 WebView2 时用浏览器应用窗口承载界面, 这是它的独立用户资料目录
