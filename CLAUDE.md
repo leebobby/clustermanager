@@ -159,3 +159,9 @@ The theme also feeds Element Plus's own CSS variables, so components follow with
 `backend/iso/` and `backend/ssh_credentials.json` are runtime state and are **not** tracked —
 see `.gitignore`. Copy the templates in `backend/pxe_data_example/` to get started, and never
 commit real credentials.
+
+The diagnosis SSH fallback can be set in `cluster_manager_config.json` beside the executable
+(in development: `backend/cluster_manager_config.json`). Copy
+`backend/cluster_manager_config.example.json` and fill `diagnose.ssh_password`. A credential
+saved from the diagnosis UI overrides this deployment default; clearing it falls back to the
+configuration file. Never commit the populated configuration.

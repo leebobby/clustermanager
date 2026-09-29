@@ -135,9 +135,9 @@ const switching = ref(false)
  * 半成品摆在第一项只会误导现场。代码留着, 想放开就把最后那行和路由一起打开。
  */
 const NAV = [
-  { path: '/', label: '组网图', icon: markRaw(Share) },
+  { path: '/', label: '告警与日志', icon: markRaw(Document) },
+  { path: '/network', label: '组网图', icon: markRaw(Share) },
   { path: '/machines', label: '机台与模板', icon: markRaw(Grid) },
-  { path: '/logs', label: '告警与日志', icon: markRaw(Document) },
   // { path: '/checkup', label: '一键诊断', icon: markRaw(TrendCharts) },
 ]
 

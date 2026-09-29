@@ -1,0 +1,7 @@
+{
+  "diagnose": {
+    "ssh_user": "root",
+    "ssh_password": "",
+    "ssh_port": 22
+  }
+}

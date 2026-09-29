@@ -340,7 +340,13 @@ def stage_webview2(args) -> None:
     if source is None:
         return
     if not source.exists():
-        die(f"--webview2 指向的路径不存在: {source}")
+        die(
+            f"--webview2 指向的路径不存在: {source}\n"
+            "       这里必须换成你实际下载的 WebView2 文件或解压目录, "
+            "不能照抄 D:\\webview2-fixed 这样的示例路径。\n"
+            "       如果准备在目标机安装 Evergreen Runtime（方案二）, "
+            "构建时请直接删除 --webview2 参数。"
+        )
 
     if args.mode != "desktop":
         warn(f"server 模式不需要 WebView2, 已忽略 {source}")
@@ -390,6 +396,12 @@ def stage_resources(args) -> None:
     if bundle.is_file():
         shutil.copy2(bundle, DIST_DIR / bundle.name)
         info("scripts_bundle.json")
+
+    # 生成可直接编辑的部署配置。示例里的密码为空，不会把开发机凭据带进发布包。
+    app_config = BACKEND_DIR / "cluster_manager_config.example.json"
+    if app_config.is_file():
+        shutil.copy2(app_config, DIST_DIR / "cluster_manager_config.json")
+        info("cluster_manager_config.json (诊断 SSH 默认凭据配置)")
 
     example = BACKEND_DIR / "pxe_data_example"
     if example.is_dir():

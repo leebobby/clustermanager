@@ -1587,10 +1587,11 @@ def update_ssh_creds(req: SSHCredsRequest):
     """保存 SSH 凭据。空密码视为清除, ******** 视为不修改"""
     if not req.ssh_password:
         cred_service.clear_creds()
-        return {"message": "已清除保存的凭据", "has_saved": False}
+        public = cred_service.get_public_info()
+        return {"message": "已清除页面保存的凭据", **public}
     if req.ssh_password == cred_service.PWD_MASK:
         # 仅修改 user/port, 密码保持不变
-        existing = cred_service.load_creds() or {}
+        existing = cred_service.effective_creds() or {}
         cred_service.save_creds(
             req.ssh_user,
             existing.get("ssh_password", ""),
@@ -1604,7 +1605,7 @@ def update_ssh_creds(req: SSHCredsRequest):
 @router.delete("/ssh-creds")
 def delete_ssh_creds():
     cred_service.clear_creds()
-    return {"message": "已清除", "has_saved": False}
+    return {"message": "已清除页面保存的凭据", **cred_service.get_public_info()}
 
 
 # ─────────────────────────────────────────────
